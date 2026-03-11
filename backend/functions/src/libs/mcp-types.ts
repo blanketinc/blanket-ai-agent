@@ -48,16 +48,8 @@ export interface MCPToolResult {
 }
 
 // --- Gemini Integration ---
-
-/**
- * Tool definition formatted for Gemini's function calling API.
- * Maps MCP tool schemas to Gemini's expected format.
- */
-export interface GeminiFunctionDeclaration {
-  name: string;
-  description: string;
-  parameters: MCPToolParameter;
-}
+// Gemini function declarations use the SDK's native FunctionDeclaration type.
+// See MCPServer.getToolDefinitions() for the conversion from MCP → Gemini format.
 
 // --- Conversation ---
 
