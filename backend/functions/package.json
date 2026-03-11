@@ -1,0 +1,38 @@
+{
+  "name": "blanket-ai-agent-functions",
+  "version": "1.0.0",
+  "description": "Blanket AI Agent - Cloud Functions backend",
+  "main": "lib/index.js",
+  "scripts": {
+    "build": "tsc",
+    "lint": "eslint src/**/*.ts",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "dev": "tsc && NODE_ENV=development node lib/index.js",
+    "deploy": "firebase deploy --only functions:api"
+  },
+  "engines": {
+    "node": "18"
+  },
+  "dependencies": {
+    "@google/genai": "^1.9.0",
+    "@sentry/node": "^5.30.0",
+    "axios": "^0.19.2",
+    "body-parser": "^1.20.2",
+    "compression": "^1.7.4",
+    "cors": "^2.8.5",
+    "express": "^4.18.2",
+    "firebase-admin": "^12.0.0",
+    "firebase-functions": "^6.4.0",
+    "pg": "^8.4.0",
+    "uuid": "^9.0.0"
+  },
+  "devDependencies": {
+    "@types/compression": "^1.7.2",
+    "@types/cors": "^2.8.13",
+    "@types/express": "^4.17.17",
+    "@types/node": "^18.0.0",
+    "@types/pg": "^8.10.0",
+    "@types/uuid": "^9.0.0",
+    "typescript": "^5.1.0"
+  }
+}
