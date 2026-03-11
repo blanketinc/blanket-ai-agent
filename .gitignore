@@ -16,6 +16,9 @@ frontend/dist/
 build/
 dist/
 
+# Compiled output
+backend/functions/lib/
+
 # Misc
 .DS_Store
 *.pem
