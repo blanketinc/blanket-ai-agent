@@ -1,0 +1,7 @@
+{
+  "projects": {
+    "default": "blanket-staging",
+    "staging": "blanket-staging",
+    "production": "blanket-alpha"
+  }
+}
