@@ -11,8 +11,19 @@ import {
   MCPToolCall,
   MCPToolResult,
   MCPAuthContext,
-  GeminiFunctionDeclaration,
+  MCPToolParameter,
 } from './mcp-types';
+import { Type, FunctionDeclaration } from '@google/genai';
+
+// Map lowercase MCP types to Gemini SDK Type enum
+const TYPE_MAP: Record<string, Type> = {
+  string: Type.STRING,
+  number: Type.NUMBER,
+  integer: Type.INTEGER,
+  boolean: Type.BOOLEAN,
+  array: Type.ARRAY,
+  object: Type.OBJECT,
+};
 
 export class MCPServer {
   private tools: Map<string, MCPTool>;
@@ -29,13 +40,34 @@ export class MCPServer {
 
   /**
    * Returns tool definitions formatted for Gemini's function calling API.
+   * Converts MCP parameter schemas to Gemini SDK FunctionDeclaration format.
    */
-  getToolDefinitions(): GeminiFunctionDeclaration[] {
+  getToolDefinitions(): FunctionDeclaration[] {
     return Array.from(this.tools.values()).map((tool) => ({
       name: tool.name,
       description: tool.description,
-      parameters: tool.parameters,
+      parameters: this.convertSchema(tool.parameters),
     }));
+  }
+
+  /**
+   * Convert MCP parameter schema (lowercase types) to Gemini SDK schema (Type enum).
+   */
+  private convertSchema(param: MCPToolParameter): any {
+    const converted: any = {
+      type: TYPE_MAP[param.type] || param.type,
+    };
+    if (param.description) converted.description = param.description;
+    if (param.enum) converted.enum = param.enum;
+    if (param.required) converted.required = param.required;
+    if (param.items) converted.items = this.convertSchema(param.items);
+    if (param.properties) {
+      converted.properties = {};
+      for (const [key, val] of Object.entries(param.properties)) {
+        converted.properties[key] = this.convertSchema(val);
+      }
+    }
+    return converted;
   }
 
   /**
