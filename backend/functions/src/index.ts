@@ -16,7 +16,30 @@ if (!admin.apps.length) {
 
 const app = express();
 
-app.use(cors({ origin: true }));
+// CORS configuration - restrict origins in production
+const allowedOrigins = [
+  'https://ai.blanket.app',
+  'https://blanket-ai-agent.vercel.app',
+  ...(process.env.NODE_ENV === 'development'
+    ? ['http://localhost:3000', 'http://localhost:5001']
+    : []),
+];
+
+app.use(
+  cors({
+    origin: (origin, callback) => {
+      // Allow requests with no origin (mobile apps, Postman, etc.)
+      if (!origin) return callback(null, true);
+      
+      if (allowedOrigins.includes(origin)) {
+        callback(null, true);
+      } else {
+        callback(new Error('Not allowed by CORS'));
+      }
+    },
+    credentials: true,
+  })
+);
 app.use(compression());
 app.use(express.json());
 
