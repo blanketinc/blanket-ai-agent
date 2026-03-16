@@ -56,6 +56,7 @@ async function getTemplate(params: any, context: MCPAuthContext) {
       query: params.templateId || params.name,
       pageSize: 1,
       page: 0,
+      isDeleted: false,
     },
   });
   const results = response.data?.data?.result;

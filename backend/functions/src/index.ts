@@ -2,6 +2,9 @@
  * Blanket AI Agent - Cloud Functions Entry Point
  */
 
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 import * as admin from 'firebase-admin';
 import * as functions from 'firebase-functions';
 import express from 'express';
@@ -10,8 +13,12 @@ import compression from 'compression';
 import chatRouter from './routes/ai-assistant/chat';
 
 // Initialize Firebase Admin (must happen before any Firebase services are used)
+// In Cloud Functions, FIREBASE_CONFIG is set automatically.
+// Locally, we use GCLOUD_PROJECT from .env to point at the correct project.
 if (!admin.apps.length) {
-  admin.initializeApp();
+  const projectId = process.env.GCLOUD_PROJECT || process.env.FIREBASE_PROJECT_ID || 'blanket-staging';
+  admin.initializeApp({ projectId });
+  console.log(`Firebase Admin initialized for project: ${projectId}`);
 }
 
 const app = express();
