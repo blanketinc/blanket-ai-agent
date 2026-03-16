@@ -2,14 +2,17 @@
  * Auth Middleware for AI Assistant
  *
  * Mirrors cloud-functions authentication/auth.middleware.ts pattern.
- * Verifies Firebase ID token, then looks up user context from PostgreSQL
- * (organizationId from `users` table, locationIds from `user_locations` table).
+ * Verifies Firebase ID token, then resolves user context via fallback chain:
+ *   1. PostgreSQL users table (primary — matches cloud-functions pattern)
+ *   2. Firebase custom claims
+ *   3. Firestore user profile
+ *   4. x-org-id header (demo/integration fallback)
  *
  * Sets req.auth with:
  *  - authInfo: Firebase DecodedIdToken (uid, email, phone, custom claims)
  *  - authId: User's database authId or Firebase UID
- *  - orgId: User's organization ID (from PostgreSQL users table)
- *  - locationIds: User's accessible locations (from PostgreSQL user_locations table)
+ *  - orgId: User's organization ID
+ *  - locationIds: User's accessible locations
  *  - token: Raw Bearer token for proxying to Blanket APIs
  */
 
@@ -35,14 +38,11 @@ declare global {
 /**
  * Look up the user's organizationId and locationIds from PostgreSQL.
  * Mirrors how cloud-functions resolves user context via UserFactory.getRepo().
- *
- * Returns { orgId, locationIds } or defaults if DB is unavailable.
  */
-async function getUserContext(
+async function getUserContextFromDB(
   authId: string
 ): Promise<{ orgId: string; locationIds: string[] }> {
   try {
-    // Look up user's organizationId from the users table
     const userResult = await pool.query(
       'SELECT "organizationId" FROM users WHERE "authId" = $1 LIMIT 1',
       [authId]
@@ -51,24 +51,115 @@ async function getUserContext(
     const orgId = userResult.rows[0]?.organizationId || '';
 
     if (!orgId) {
-      console.warn(`No organization found for authId: ${authId}`);
+      console.warn(`No organization found in DB for authId: ${authId}`);
       return { orgId: '', locationIds: [] };
     }
 
-    // Look up user's locationIds from the user_locations junction table
     const locResult = await pool.query(
       'SELECT "locationId" FROM user_locations WHERE "userId" = $1',
       [authId]
     );
 
     const locationIds = locResult.rows.map((r: any) => r.locationId);
-
     return { orgId, locationIds };
   } catch (err: any) {
-    // If PostgreSQL is not configured/available, log and continue with empty context
     console.warn('DB lookup for user context failed:', err?.message || err);
     return { orgId: '', locationIds: [] };
   }
+}
+
+/**
+ * Resolve orgId from Firebase custom claims (multiple possible structures).
+ */
+function getOrgFromClaims(
+  authInfo: admin.auth.DecodedIdToken
+): { orgId: string; locationIds: string[] } {
+  const claims = authInfo as any;
+
+  // Direct custom claim
+  if (claims.orgId) {
+    return { orgId: claims.orgId, locationIds: claims.locationIds || [] };
+  }
+
+  // Nested custom claims (blanket.orgId, app.orgId, etc.)
+  const nested = claims.blanket || claims.app || claims.organization || null;
+  if (nested?.orgId || nested?.organizationId) {
+    return {
+      orgId: nested.orgId || nested.organizationId,
+      locationIds: nested.locationIds || claims.locationIds || [],
+    };
+  }
+
+  return { orgId: '', locationIds: [] };
+}
+
+/**
+ * Resolve orgId from Firestore user profile.
+ */
+async function getOrgFromFirestore(
+  uid: string
+): Promise<{ orgId: string; locationIds: string[] }> {
+  try {
+    const db = admin.firestore();
+    for (const collection of ['users', 'userProfiles']) {
+      const doc = await db.collection(collection).doc(uid).get();
+      if (doc.exists) {
+        const data = doc.data();
+        const orgId = data?.orgId || data?.organizationId || '';
+        if (orgId) {
+          return { orgId, locationIds: data?.locationIds || [] };
+        }
+      }
+    }
+  } catch (err: any) {
+    console.warn('Firestore org lookup failed:', err?.message || err);
+  }
+  return { orgId: '', locationIds: [] };
+}
+
+/**
+ * Full fallback chain for resolving org context.
+ */
+async function resolveOrgContext(
+  authInfo: admin.auth.DecodedIdToken,
+  authId: string,
+  req: Request
+): Promise<{ orgId: string; locationIds: string[] }> {
+  // 1. PostgreSQL (primary — mirrors cloud-functions)
+  const dbResult = await getUserContextFromDB(authId);
+  if (dbResult.orgId) return dbResult;
+
+  // 2. Firebase custom claims
+  const claimsResult = getOrgFromClaims(authInfo);
+  if (claimsResult.orgId) return claimsResult;
+
+  // 3. Firestore user profile
+  const firestoreResult = await getOrgFromFirestore(authInfo.uid);
+  if (firestoreResult.orgId) return firestoreResult;
+
+  // 4. Request header / query param fallback (demo/integration)
+  const headerOrgId =
+    (req.headers['x-org-id'] as string) ||
+    (req.query.orgId as string) ||
+    '';
+  if (headerOrgId) {
+    return { orgId: headerOrgId, locationIds: [] };
+  }
+
+  // 5. Dev environment fallback
+  if (process.env.NODE_ENV === 'development') {
+    const devOrgId = process.env.DEV_ORG_ID || '';
+    const devLocs = process.env.DEV_LOCATION_IDS || '';
+    if (devOrgId) {
+      console.log(`Using dev fallback org context: orgId=${devOrgId}`);
+      return {
+        orgId: devOrgId,
+        locationIds: devLocs ? devLocs.split(',').map((s) => s.trim()) : [],
+      };
+    }
+  }
+
+  return { orgId: '', locationIds: [] };
 }
 
 export async function authMiddleware(
@@ -102,18 +193,8 @@ export async function authMiddleware(
 
     const authId = authInfo.uid;
 
-    // Resolve user's org + locations from PostgreSQL (mirrors cloud-functions pattern)
-    let { orgId, locationIds } = await getUserContext(authId);
-
-    // In development, allow env-based fallback when DB is unavailable
-    if (!orgId && process.env.NODE_ENV === 'development') {
-      orgId = process.env.DEV_ORG_ID || '';
-      const devLocs = process.env.DEV_LOCATION_IDS || '';
-      locationIds = devLocs ? devLocs.split(',').map((s) => s.trim()) : [];
-      if (orgId) {
-        console.log(`Using dev fallback org context: orgId=${orgId}`);
-      }
-    }
+    // Resolve org context via fallback chain
+    const { orgId, locationIds } = await resolveOrgContext(authInfo, authId, req);
 
     req.auth = {
       authInfo,
