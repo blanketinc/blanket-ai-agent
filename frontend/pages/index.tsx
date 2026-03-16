@@ -2,7 +2,13 @@ import { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/router';
 import { onAuthChange, getIdToken, signOut, User } from '../lib/firebase';
 import { sendMessage, ChatResponse } from '../lib/api';
-import ChatMessage from '../components/ChatMessage';
+import {
+  streamMessage,
+  streamApproval,
+  StreamCallbacks,
+  ApprovalRequestData,
+} from '../lib/streaming';
+import ChatMessage, { MessagePart } from '../components/ChatMessage';
 import ChatInput from '../components/ChatInput';
 import ChatHistory from '../components/ChatHistory';
 import styles from '../styles/Chat.module.css';
@@ -12,6 +18,10 @@ interface Message {
   content: string;
   toolCalls?: Array<{ tool: string; action: string; success: boolean }>;
   timestamp: number;
+  /** Structured parts for streaming messages */
+  parts?: MessagePart[];
+  /** Whether this message is still streaming */
+  isStreaming?: boolean;
 }
 
 interface Conversation {
@@ -29,7 +39,10 @@ export default function ChatPage() {
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [approvalProcessing, setApprovalProcessing] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
+  /** Track the current pending approval ID */
+  const pendingApprovalRef = useRef<string | null>(null);
 
   // Auth check
   useEffect(() => {
@@ -49,6 +62,50 @@ export default function ChatPage() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
+  /**
+   * Helper: update the last assistant message's parts.
+   */
+  const appendPart = useCallback((part: MessagePart) => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last && last.role === 'assistant' && last.isStreaming) {
+        last.parts = [...(last.parts || []), part];
+        // Accumulate text content
+        if (part.type === 'text' && part.content) {
+          last.content += part.content;
+        }
+      }
+      return [...updated];
+    });
+  }, []);
+
+  /**
+   * Helper: mark the last tool-call part as completed with result.
+   */
+  const resolveToolCall = useCallback((toolResultData: any) => {
+    setMessages((prev) => {
+      const updated = [...prev];
+      const last = updated[updated.length - 1];
+      if (last && last.role === 'assistant' && last.parts) {
+        // Find the matching active tool-call part
+        for (let i = last.parts.length - 1; i >= 0; i--) {
+          const p = last.parts[i];
+          if (p.type === 'tool-call' && p.toolCall?.isActive) {
+            p.toolCall.isActive = false;
+            p.toolCall.result = {
+              success: toolResultData.success,
+              result: toolResultData.result,
+              error: toolResultData.error,
+            };
+            break;
+          }
+        }
+      }
+      return [...updated];
+    });
+  }, []);
+
   const handleSend = useCallback(
     async (message: string) => {
       if (sending) return;
@@ -65,77 +122,201 @@ export default function ChatPage() {
         content: message,
         timestamp: Date.now(),
       };
-      setMessages((prev) => [...prev, userMsg]);
+
+      // Add streaming placeholder for assistant
+      const assistantMsg: Message = {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        parts: [],
+        isStreaming: true,
+      };
+
+      setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setSending(true);
+      pendingApprovalRef.current = null;
 
-      try {
-        const response: ChatResponse = await sendMessage(
-          message,
-          token,
-          conversationId
-        );
-
-        if (response.success && response.result) {
-          // Set conversation ID from first response
-          if (!conversationId) {
-            setConversationId(response.result.conversationId);
-
-            // Add to conversation list
-            setConversations((prev) => [
-              {
-                id: response.result!.conversationId,
-                preview: message.slice(0, 50),
-                updatedAt: Date.now(),
-              },
-              ...prev,
-            ]);
+      const callbacks: StreamCallbacks = {
+        onThinking: (data) => {
+          appendPart({ type: 'thinking', content: data.content });
+        },
+        onText: (data) => {
+          appendPart({ type: 'text', content: data.content });
+        },
+        onToolCall: (data) => {
+          appendPart({
+            type: 'tool-call',
+            toolCall: {
+              id: data.id,
+              tool: data.tool,
+              action: data.action,
+              params: data.params,
+              isActive: true,
+            },
+          });
+        },
+        onToolResult: (data) => {
+          resolveToolCall(data);
+        },
+        onApprovalRequest: (data: ApprovalRequestData) => {
+          pendingApprovalRef.current = data.id;
+          appendPart({
+            type: 'approval-request',
+            approval: {
+              id: data.id,
+              description: data.description,
+              status: 'pending',
+            },
+          });
+        },
+        onDiff: (data) => {
+          appendPart({
+            type: 'diff',
+            diff: data,
+          });
+        },
+        onError: (data) => {
+          appendPart({ type: 'text', content: `Error: ${data.message}` });
+        },
+        onDone: (data) => {
+          if (data.conversationId && !data.partial) {
+            if (!conversationId) {
+              setConversationId(data.conversationId);
+              setConversations((prev) => [
+                {
+                  id: data.conversationId!,
+                  preview: message.slice(0, 50),
+                  updatedAt: Date.now(),
+                },
+                ...prev,
+              ]);
+            }
           }
 
-          // Add assistant response
-          const assistantMsg: Message = {
-            role: 'assistant',
-            content: response.result.message,
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-        } else {
-          // Show error as assistant message
-          const errorMsg: Message = {
-            role: 'assistant',
-            content:
-              response.error ||
-              'Something went wrong. Please try again.',
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => [...prev, errorMsg]);
-        }
+          // Mark streaming as done (only on final done, not partial)
+          if (!data.partial) {
+            setMessages((prev) => {
+              const updated = [...prev];
+              const last = updated[updated.length - 1];
+              if (last && last.role === 'assistant') {
+                last.isStreaming = false;
+              }
+              return [...updated];
+            });
+            setSending(false);
+          }
+        },
+      };
+
+      try {
+        await streamMessage(message, token, callbacks, conversationId);
       } catch (err) {
-        const errorMsg: Message = {
-          role: 'assistant',
-          content:
-            'Unable to reach the server. Please check your connection and try again.',
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
-      } finally {
+        appendPart({
+          type: 'text',
+          content: 'Unable to reach the server. Please check your connection and try again.',
+        });
+        setMessages((prev) => {
+          const updated = [...prev];
+          const last = updated[updated.length - 1];
+          if (last && last.role === 'assistant') {
+            last.isStreaming = false;
+          }
+          return [...updated];
+        });
         setSending(false);
       }
     },
-    [sending, conversationId, router]
+    [sending, conversationId, router, appendPart, resolveToolCall]
+  );
+
+  /**
+   * Handle approval/rejection of a pending action.
+   */
+  const handleApproval = useCallback(
+    async (approvalId: string, approved: boolean) => {
+      const token = await getIdToken();
+      if (!token) return;
+
+      setApprovalProcessing(true);
+
+      // Update the approval status in the message parts
+      setMessages((prev) => {
+        const updated = [...prev];
+        for (const msg of updated) {
+          if (msg.parts) {
+            for (const part of msg.parts) {
+              if (part.type === 'approval-request' && part.approval?.id === approvalId) {
+                part.approval.status = approved ? 'approved' : 'rejected';
+              }
+            }
+          }
+        }
+        return [...updated];
+      });
+
+      // Add a new streaming assistant message for the approval result
+      const resultMsg: Message = {
+        role: 'assistant',
+        content: '',
+        timestamp: Date.now(),
+        parts: [],
+        isStreaming: true,
+      };
+      setMessages((prev) => [...prev, resultMsg]);
+
+      const callbacks: StreamCallbacks = {
+        onThinking: (data) => appendPart({ type: 'thinking', content: data.content }),
+        onText: (data) => appendPart({ type: 'text', content: data.content }),
+        onToolCall: (data) => {
+          appendPart({
+            type: 'tool-call',
+            toolCall: {
+              id: data.id,
+              tool: data.tool,
+              action: data.action,
+              params: data.params,
+              isActive: true,
+            },
+          });
+        },
+        onToolResult: (data) => resolveToolCall(data),
+        onError: (data) => appendPart({ type: 'text', content: `Error: ${data.message}` }),
+        onDone: () => {
+          setMessages((prev) => {
+            const updated = [...prev];
+            const last = updated[updated.length - 1];
+            if (last && last.role === 'assistant') {
+              last.isStreaming = false;
+            }
+            return [...updated];
+          });
+          setApprovalProcessing(false);
+        },
+      };
+
+      try {
+        await streamApproval(approvalId, approved, token, callbacks);
+      } catch (err) {
+        appendPart({ type: 'text', content: 'Failed to process approval.' });
+        setApprovalProcessing(false);
+      }
+    },
+    [appendPart, resolveToolCall]
   );
 
   const handleNewChat = useCallback(() => {
     setMessages([]);
     setConversationId(undefined);
     setSidebarOpen(false);
+    pendingApprovalRef.current = null;
   }, []);
 
   const handleSelectConversation = useCallback(
     (id: string) => {
-      // For now just switch — history loading can be added later
       setConversationId(id);
       setMessages([]);
       setSidebarOpen(false);
+      pendingApprovalRef.current = null;
     },
     []
   );
@@ -198,6 +379,7 @@ export default function ChatPage() {
             </svg>
           </button>
           <h1 className={styles.headerTitle}>Blanket AI</h1>
+          <span className={styles.headerBadge}>Agent</span>
           <div className={styles.headerRight}>
             <span className={styles.userEmail}>{user?.email}</span>
             <button onClick={handleSignOut} className={styles.signOutButton}>
@@ -210,39 +392,49 @@ export default function ChatPage() {
         <div className={styles.messagesContainer}>
           {messages.length === 0 && (
             <div className={styles.welcome}>
-              <h2>Welcome to Blanket AI</h2>
+              <h2>Blanket AI Agent</h2>
               <p>
-                I can help you manage templates, analyze performance, and
-                answer food safety questions.
+                I autonomously manage your restaurant operations — templates,
+                analytics, and food safety. Watch me think, explore, and act.
               </p>
               <div className={styles.suggestions}>
                 <button
                   className={styles.suggestion}
                   onClick={() =>
                     handleSend(
-                      'Show completion rates for all locations this week'
+                      'We just added a new seasonal salad to all locations. Which templates need updating?'
                     )
                   }
                 >
-                  Show completion rates this week
+                  New seasonal salad — update templates
                 </button>
                 <button
                   className={styles.suggestion}
                   onClick={() =>
-                    handleSend('List all bar opening checklists')
+                    handleSend('Which locations have compliance issues this week?')
                   }
                 >
-                  List bar opening checklists
+                  Find compliance issues
                 </button>
                 <button
                   className={styles.suggestion}
                   onClick={() =>
                     handleSend(
-                      'What temperature should cooked chicken be held at?'
+                      'Set up templates for our new Miami location based on our Phoenix setup'
                     )
                   }
                 >
-                  Food safety: chicken holding temp
+                  Set up new Miami location
+                </button>
+                <button
+                  className={styles.suggestion}
+                  onClick={() =>
+                    handleSend(
+                      'Add a temperature check task to all opening checklists'
+                    )
+                  }
+                >
+                  Add temp checks to opening lists
                 </button>
               </div>
             </div>
@@ -255,23 +447,20 @@ export default function ChatPage() {
               content={msg.content}
               toolCalls={msg.toolCalls}
               timestamp={msg.timestamp}
+              parts={msg.parts}
+              isStreaming={msg.isStreaming}
+              onApprove={(id) => handleApproval(id, true)}
+              onReject={(id) => handleApproval(id, false)}
+              approvalProcessing={approvalProcessing}
             />
           ))}
-
-          {sending && (
-            <div className={styles.typingIndicator}>
-              <span />
-              <span />
-              <span />
-            </div>
-          )}
 
           <div ref={messagesEndRef} />
         </div>
 
         {/* Input */}
         <div className={styles.inputContainer}>
-          <ChatInput onSend={handleSend} disabled={sending} />
+          <ChatInput onSend={handleSend} disabled={sending || approvalProcessing} />
         </div>
       </div>
     </div>

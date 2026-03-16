@@ -461,6 +461,331 @@
   opacity: 0.6;
 }
 
+/* Header badge */
+.headerBadge {
+  background: linear-gradient(135deg, #8b5cf6, #6366f1);
+  color: white;
+  font-size: 0.6875rem;
+  font-weight: 600;
+  padding: 0.125rem 0.5rem;
+  border-radius: 999px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+/* Streamed text within parts */
+.streamedText {
+  margin: 0;
+}
+
+.streamedText p {
+  margin: 0.25rem 0;
+}
+
+.streamedText p:first-child {
+  margin-top: 0;
+}
+
+/* Streaming cursor */
+.streamCursor {
+  display: inline-block;
+  width: 2px;
+  height: 1em;
+  background: var(--primary);
+  animation: blink 1s step-end infinite;
+  vertical-align: text-bottom;
+  margin-left: 2px;
+}
+
+@keyframes blink {
+  50% { opacity: 0; }
+}
+
+/* Thinking Block */
+.thinkingBlock {
+  border-left: 2px solid #a78bfa;
+  border-radius: 0 var(--radius) var(--radius) 0;
+  margin: 0.5rem 0;
+  background: #faf5ff;
+  overflow: hidden;
+}
+
+.thinkingActive {
+  border-left-color: #8b5cf6;
+}
+
+.thinkingToggle {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  background: none;
+  border: none;
+  padding: 0.5rem 0.75rem;
+  font-size: 0.8125rem;
+  color: #7c3aed;
+  cursor: pointer;
+  text-align: left;
+}
+
+.thinkingToggle:hover {
+  background: rgba(139, 92, 246, 0.05);
+}
+
+.thinkingIcon {
+  display: flex;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.thinkingSpinner {
+  width: 14px;
+  height: 14px;
+  border: 2px solid #c4b5fd;
+  border-top-color: #7c3aed;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to { transform: rotate(360deg); }
+}
+
+.thinkingLabel {
+  font-weight: 500;
+  flex: 1;
+}
+
+.thinkingChevron {
+  transition: transform 0.15s;
+  flex-shrink: 0;
+}
+
+.thinkingChevronOpen {
+  transform: rotate(180deg);
+}
+
+.thinkingContent {
+  padding: 0 0.75rem 0.5rem;
+  font-size: 0.8125rem;
+  color: #6b21a8;
+  line-height: 1.5;
+  white-space: pre-wrap;
+}
+
+/* Tool Call Display */
+.toolCallDisplay {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  margin: 0.375rem 0;
+  padding: 0.5rem 0.75rem;
+  background: #f0fdf4;
+  border: 1px solid #bbf7d0;
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+}
+
+.toolCallActive {
+  background: #eff6ff;
+  border-color: #bfdbfe;
+}
+
+.toolCallHeader {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.toolCallSpinner {
+  width: 12px;
+  height: 12px;
+  border: 2px solid #93c5fd;
+  border-top-color: #2563eb;
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+  flex-shrink: 0;
+}
+
+.toolCallIconSuccess {
+  color: var(--success);
+  flex-shrink: 0;
+}
+
+.toolCallIconError {
+  color: var(--error);
+  flex-shrink: 0;
+}
+
+.toolCallLabel {
+  font-weight: 600;
+  color: var(--text);
+}
+
+.toolCallAction {
+  color: var(--text-secondary);
+}
+
+.toolCallError {
+  font-size: 0.75rem;
+  color: var(--error);
+  padding-left: 1.5rem;
+}
+
+/* Diff View */
+.diffView {
+  margin: 0.5rem 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  font-size: 0.8125rem;
+}
+
+.diffHeader {
+  background: var(--surface-hover);
+  padding: 0.5rem 0.75rem;
+  font-weight: 600;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border);
+}
+
+.diffEmpty {
+  padding: 0.75rem;
+  color: var(--text-secondary);
+  font-style: italic;
+}
+
+.diffContent {
+  max-height: 300px;
+  overflow-y: auto;
+}
+
+.diffRow {
+  padding: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--border);
+}
+
+.diffRow:last-child {
+  border-bottom: none;
+}
+
+.diffKey {
+  font-weight: 600;
+  margin-bottom: 0.25rem;
+  color: var(--text);
+}
+
+.diffOld {
+  background: #fef2f2;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+  margin-bottom: 0.25rem;
+}
+
+.diffNew {
+  background: #f0fdf4;
+  padding: 0.25rem 0.5rem;
+  border-radius: 4px;
+}
+
+.diffLabel {
+  font-size: 0.6875rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-secondary);
+  margin-right: 0.5rem;
+}
+
+.diffView pre {
+  margin: 0;
+  font-size: 0.75rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+/* Approval Buttons */
+.approvalContainer {
+  margin: 0.5rem 0;
+  padding: 0.75rem;
+  border: 1px solid #fbbf24;
+  background: #fffbeb;
+  border-radius: var(--radius);
+}
+
+.approvalDescription {
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: #92400e;
+  margin-bottom: 0.5rem;
+  line-height: 1.4;
+}
+
+.approvalActions {
+  display: flex;
+  gap: 0.5rem;
+}
+
+.approveButton,
+.rejectButton {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  padding: 0.375rem 0.75rem;
+  border-radius: var(--radius);
+  font-size: 0.8125rem;
+  font-weight: 500;
+  border: 1px solid;
+  transition: all 0.15s;
+}
+
+.approveButton {
+  background: var(--success);
+  color: white;
+  border-color: var(--success);
+}
+
+.approveButton:hover:not(:disabled) {
+  background: #15803d;
+}
+
+.rejectButton {
+  background: white;
+  color: var(--error);
+  border-color: var(--error);
+}
+
+.rejectButton:hover:not(:disabled) {
+  background: #fef2f2;
+}
+
+.approveButton:disabled,
+.rejectButton:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.approvalResolved {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--success);
+}
+
+.approvalRejected {
+  display: flex;
+  align-items: center;
+  gap: 0.375rem;
+  font-size: 0.8125rem;
+  font-weight: 500;
+  color: var(--text-secondary);
+}
+
 /* Overlay */
 .overlay {
   display: none;
