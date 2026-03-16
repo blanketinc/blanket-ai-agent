@@ -75,3 +75,42 @@ export interface MCPConversation {
   createdAt: number;
   updatedAt: number;
 }
+
+// --- SSE Streaming Types ---
+
+export type SSEEventType =
+  | 'thinking'
+  | 'text'
+  | 'tool-call'
+  | 'tool-result'
+  | 'approval-request'
+  | 'diff'
+  | 'error'
+  | 'done';
+
+export interface SSEEvent {
+  type: SSEEventType;
+  data: any;
+}
+
+export interface ApprovalRequest {
+  id: string;
+  conversationId: string;
+  tool: string;
+  action: string;
+  description: string;
+  params: Record<string, any>;
+  diff?: {
+    before: any;
+    after: any;
+  };
+  status: 'pending' | 'approved' | 'rejected';
+  createdAt: number;
+}
+
+// Actions that require user approval before execution
+export const MUTATING_ACTIONS = [
+  'update_template',
+  'add_task_to_template',
+  'create_template',
+];
