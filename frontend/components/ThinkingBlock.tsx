@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import styles from '../styles/Chat.module.css';
 
 interface ThinkingBlockProps {
@@ -8,6 +8,21 @@ interface ThinkingBlockProps {
 
 export default function ThinkingBlock({ content, isActive }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const contentRef = useRef<HTMLDivElement>(null);
+
+  // Auto-expand when actively thinking so user sees live text
+  useEffect(() => {
+    if (isActive) {
+      setExpanded(true);
+    }
+  }, [isActive]);
+
+  // Auto-scroll the live thinking content as it streams in
+  useEffect(() => {
+    if (isActive && expanded && contentRef.current) {
+      contentRef.current.scrollTop = contentRef.current.scrollHeight;
+    }
+  }, [content, isActive, expanded]);
 
   return (
     <div className={`${styles.thinkingBlock} ${isActive ? styles.thinkingActive : ''}`}>
@@ -41,8 +56,12 @@ export default function ThinkingBlock({ content, isActive }: ThinkingBlockProps)
         </svg>
       </button>
       {expanded && (
-        <div className={styles.thinkingContent}>
+        <div
+          ref={contentRef}
+          className={isActive ? styles.thinkingContentLive : styles.thinkingContent}
+        >
           {content}
+          {isActive && <span className={styles.streamCursor} />}
         </div>
       )}
     </div>

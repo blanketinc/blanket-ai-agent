@@ -40,6 +40,8 @@ export default function ChatPage() {
   const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [approvalProcessing, setApprovalProcessing] = useState(false);
+  /** True until the first SSE event arrives — drives the typing indicator */
+  const [waitingForResponse, setWaitingForResponse] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   /** Track the current pending approval ID */
   const pendingApprovalRef = useRef<string | null>(null);
@@ -134,16 +136,23 @@ export default function ChatPage() {
 
       setMessages((prev) => [...prev, userMsg, assistantMsg]);
       setSending(true);
+      setWaitingForResponse(true);
       pendingApprovalRef.current = null;
+
+      /** Hide typing indicator on first real event */
+      const clearWaiting = () => setWaitingForResponse(false);
 
       const callbacks: StreamCallbacks = {
         onThinking: (data) => {
+          clearWaiting();
           appendPart({ type: 'thinking', content: data.content });
         },
         onText: (data) => {
+          clearWaiting();
           appendPart({ type: 'text', content: data.content });
         },
         onToolCall: (data) => {
+          clearWaiting();
           appendPart({
             type: 'tool-call',
             toolCall: {
@@ -159,6 +168,7 @@ export default function ChatPage() {
           resolveToolCall(data);
         },
         onApprovalRequest: (data: ApprovalRequestData) => {
+          clearWaiting();
           pendingApprovalRef.current = data.id;
           appendPart({
             type: 'approval-request',
@@ -170,12 +180,14 @@ export default function ChatPage() {
           });
         },
         onDiff: (data) => {
+          clearWaiting();
           appendPart({
             type: 'diff',
             diff: data,
           });
         },
         onError: (data) => {
+          clearWaiting();
           appendPart({ type: 'text', content: `Error: ${data.message}` });
         },
         onDone: (data) => {
@@ -211,6 +223,7 @@ export default function ChatPage() {
       try {
         await streamMessage(message, token, callbacks, conversationId);
       } catch (err) {
+        setWaitingForResponse(false);
         appendPart({
           type: 'text',
           content: 'Unable to reach the server. Please check your connection and try again.',
@@ -454,6 +467,23 @@ export default function ChatPage() {
               approvalProcessing={approvalProcessing}
             />
           ))}
+
+          {/* Typing indicator — visible immediately while waiting for first SSE event */}
+          {waitingForResponse && (
+            <div className={styles.typingIndicator}>
+              <div className={styles.messageAvatar}>
+                <div className={styles.aiAvatar}>AI</div>
+              </div>
+              <div className={styles.typingBubble}>
+                <div className={styles.typingDots}>
+                  <span />
+                  <span />
+                  <span />
+                </div>
+                <span className={styles.typingLabel}>Thinking</span>
+              </div>
+            </div>
+          )}
 
           <div ref={messagesEndRef} />
         </div>

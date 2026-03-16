@@ -109,7 +109,7 @@ export default function ChatMessage({
                 return null;
             }
           })}
-          {isStreaming && (
+          {isStreaming && parts.length > 0 && parts[parts.length - 1].type === 'text' && (
             <span className={styles.streamCursor} />
           )}
         </div>
