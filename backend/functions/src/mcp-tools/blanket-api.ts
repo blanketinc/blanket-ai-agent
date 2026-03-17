@@ -48,16 +48,25 @@ async function listTemplates(params: any, context: MCPAuthContext) {
 
 async function getTemplate(params: any, context: MCPAuthContext) {
   const client = getAxiosInstance(context.token);
+
+  // If we have a templateId (UUID), filter by id directly
+  const queryData: any = {
+    organizationId: context.orgId,
+    relations: ['tasks'],
+    isJoinTasks: true,
+    pageSize: 1,
+    page: 0,
+    isDeleted: false,
+  };
+
+  if (params.templateId) {
+    queryData.id = params.templateId;
+  } else if (params.name) {
+    queryData.query = params.name;
+  }
+
   const response = await client.post('/v2/list-templates/list', {
-    data: {
-      organizationId: context.orgId,
-      relations: ['tasks'],
-      isJoinTasks: true,
-      query: params.templateId || params.name,
-      pageSize: 1,
-      page: 0,
-      isDeleted: false,
-    },
+    data: queryData,
   });
   const results = response.data?.data?.result;
   return results?.[0] || null;

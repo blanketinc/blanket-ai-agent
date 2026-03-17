@@ -113,8 +113,9 @@ export default function ChatPage() {
   );
 
   /**
-   * Handle approval/rejection — still uses our custom streaming
+   * Handle approval/rejection — uses our custom streaming
    * since the approval endpoint is separate from the chat flow.
+   * Captures response and appends it to the AI SDK messages.
    */
   const handleApproval = useCallback(
     async (approvalId: string, approved: boolean) => {
@@ -122,20 +123,69 @@ export default function ChatPage() {
       if (!token) return;
       setApprovalProcessing(true);
 
+      let responseText = '';
+      let thinkingText = '';
+
       const callbacks: StreamCallbacks = {
-        onText: () => {},
-        onThinking: () => {},
-        onDone: () => setApprovalProcessing(false),
-        onError: () => setApprovalProcessing(false),
+        onText: (data) => {
+          responseText += data.content || '';
+        },
+        onThinking: (data) => {
+          thinkingText += data.content || '';
+        },
+        onToolResult: (data) => {
+          if (data.error) {
+            responseText += `\n⚠️ Error: ${data.error}`;
+          }
+        },
+        onError: (data) => {
+          responseText += `\n❌ ${data.message || 'Approval failed'}`;
+          setApprovalProcessing(false);
+        },
+        onDone: () => {
+          setApprovalProcessing(false);
+          // Append the approval result as a new assistant message in the chat
+          const parts: any[] = [];
+          if (thinkingText) {
+            parts.push({ type: 'reasoning', text: thinkingText, state: 'done' });
+          }
+          if (responseText) {
+            parts.push({ type: 'text', text: responseText, state: 'done' });
+          } else {
+            parts.push({
+              type: 'text',
+              text: approved
+                ? '✅ Action approved and executed.'
+                : '❌ Action was rejected.',
+              state: 'done',
+            });
+          }
+          setChatMessages((prev: any[]) => [
+            ...prev,
+            {
+              id: `approval-${Date.now()}`,
+              role: 'assistant',
+              parts,
+            },
+          ]);
+        },
       };
 
       try {
         await streamApproval(approvalId, approved, token, callbacks);
       } catch {
         setApprovalProcessing(false);
+        setChatMessages((prev: any[]) => [
+          ...prev,
+          {
+            id: `approval-err-${Date.now()}`,
+            role: 'assistant',
+            parts: [{ type: 'text', text: '❌ Failed to process approval. Please try again.', state: 'done' }],
+          },
+        ]);
       }
     },
-    []
+    [setChatMessages]
   );
 
   const handleNewChat = useCallback(() => {
