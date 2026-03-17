@@ -73,8 +73,8 @@ export default function ChatPage() {
   const displayedLenRef = useRef(0);
   const typewriterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
-  const CHARS_PER_TICK = 3; // characters to reveal per tick
-  const TICK_MS = 16; // ~60fps
+  const CHARS_PER_TICK = 1; // characters to reveal per tick
+  const TICK_MS = 20; // ~50 chars/sec, similar to ChatGPT
 
   const startTypewriter = useCallback(() => {
     if (typewriterTimerRef.current) return; // already running
