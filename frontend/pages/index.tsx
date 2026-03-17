@@ -72,11 +72,30 @@ export default function ChatPage() {
       const updated = [...prev];
       const last = updated[updated.length - 1];
       if (last && last.role === 'assistant' && last.isStreaming) {
-        last.parts = [...(last.parts || []), part];
-        // Accumulate text content
+        const parts = last.parts || [];
+
+        // Merge consecutive text chunks into a single part for smooth streaming
         if (part.type === 'text' && part.content) {
+          const lastPart = parts[parts.length - 1];
+          if (lastPart && lastPart.type === 'text') {
+            lastPart.content = (lastPart.content || '') + part.content;
+          } else {
+            parts.push(part);
+          }
           last.content += part.content;
+        } else if (part.type === 'thinking') {
+          // Merge consecutive thinking chunks too
+          const lastPart = parts[parts.length - 1];
+          if (lastPart && lastPart.type === 'thinking') {
+            lastPart.content = (lastPart.content || '') + (part.content || '');
+          } else {
+            parts.push(part);
+          }
+        } else {
+          parts.push(part);
         }
+
+        last.parts = [...parts];
       }
       return [...updated];
     });
