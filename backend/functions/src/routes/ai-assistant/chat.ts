@@ -387,8 +387,9 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
         },
       });
 
-      // Collect the full response while streaming text chunks
+      // Collect the full response while streaming text token-by-token
       let accumulatedText = '';
+      let streamedTextLength = 0; // tracks how much text we've already sent
       const responseParts: any[] = [];
       const functionCallParts: any[] = [];
 
@@ -406,7 +407,7 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
           }
         }
 
-        // Stream text as it arrives — extract thinking blocks
+        // Stream text deltas as they arrive — extract thinking blocks
         if (accumulatedText) {
           const thinkRegex = /<think>([\s\S]*?)<\/think>/g;
           let thinkMatch;
@@ -415,10 +416,8 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
 
           // Process complete think blocks
           while ((thinkMatch = thinkRegex.exec(accumulatedText)) !== null) {
-            // Text before think block
             const before = accumulatedText.slice(lastIndex, thinkMatch.index);
             if (before.trim()) cleanText += before;
-            // Stream thinking
             sendSSE(res, {
               type: 'thinking',
               data: { content: thinkMatch[1].trim() },
@@ -426,17 +425,20 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
             lastIndex = thinkRegex.lastIndex;
           }
 
-          // Remaining text after all think blocks
           const remaining = accumulatedText.slice(lastIndex);
 
           // Only stream text that doesn't contain a partial <think> tag
           if (!remaining.includes('<think')) {
             cleanText += remaining;
-            if (cleanText.trim()) {
-              sendSSE(res, { type: 'text', data: { content: cleanText.trim() } });
-              fullResponseText += cleanText;
+            // Only send the NEW text since last SSE (delta)
+            const delta = cleanText.slice(streamedTextLength);
+            if (delta) {
+              sendSSE(res, { type: 'text', data: { content: delta } });
+              fullResponseText += delta;
+              streamedTextLength = cleanText.length;
             }
             accumulatedText = '';
+            streamedTextLength = 0;
           }
         }
       }

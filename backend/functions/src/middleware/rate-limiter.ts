@@ -10,7 +10,7 @@
  * - Circuit breaker: 5 min cooldown after 3 consecutive errors
  */
 
-import { Request, Response, NextFunction } from 'express';
+import { Response, NextFunction } from 'express';
 
 interface RateLimit {
   count: number;
@@ -41,24 +41,26 @@ const CIRCUIT_BREAKER_COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
  * Rate limit middleware for chat endpoints.
  * Checks both per-user and per-org limits.
  */
-export function rateLimiter(req: any, res: Response, next: NextFunction) {
+export function rateLimiter(req: any, res: Response, next: NextFunction): void {
   const userId = req.auth?.authId;
   const orgId = req.auth?.orgId;
   const now = Date.now();
 
   if (!userId || !orgId) {
-    return res.status(401).json({ error: 'Authentication required' });
+    res.status(401).json({ error: 'Authentication required' });
+    return;
   }
 
   // Check circuit breaker
   const breaker = circuitBreakers.get(userId);
   if (breaker && breaker.cooldownUntil > now) {
     const remainingSec = Math.ceil((breaker.cooldownUntil - now) / 1000);
-    return res.status(429).json({
+    res.status(429).json({
       error: 'Too many errors. Please wait before trying again.',
       retryAfter: remainingSec,
       reason: 'circuit_breaker',
     });
+    return;
   }
 
   // Check user rate limit
@@ -66,11 +68,12 @@ export function rateLimiter(req: any, res: Response, next: NextFunction) {
   if (userLimit && userLimit.resetAt > now) {
     if (userLimit.count >= USER_LIMIT) {
       const remainingSec = Math.ceil((userLimit.resetAt - now) / 1000);
-      return res.status(429).json({
+      res.status(429).json({
         error: `Rate limit exceeded. You can make ${USER_LIMIT} requests per minute. Please wait ${remainingSec} seconds.`,
         retryAfter: remainingSec,
         reason: 'user_limit',
       });
+      return;
     }
     userLimit.count++;
   } else {
@@ -82,11 +85,12 @@ export function rateLimiter(req: any, res: Response, next: NextFunction) {
   if (orgLimit && orgLimit.resetAt > now) {
     if (orgLimit.count >= ORG_LIMIT) {
       const remainingSec = Math.ceil((orgLimit.resetAt - now) / 1000);
-      return res.status(429).json({
+      res.status(429).json({
         error: `Organization rate limit exceeded. Limit: ${ORG_LIMIT} requests per hour. Please wait ${remainingSec} seconds.`,
         retryAfter: remainingSec,
         reason: 'org_limit',
       });
+      return;
     }
     orgLimit.count++;
   } else {

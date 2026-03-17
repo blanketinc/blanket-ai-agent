@@ -59,7 +59,13 @@ app.get('/v2/ai-assistant/health', (_req, res) => {
 app.use('/v2/ai-assistant', chatRouter);
 
 // Cloud Function export
-export const aiAgent = functions.runWith({ secrets: ['GEMINI_API_KEY'] }).https.onRequest(app);
+export const aiAgent = functions
+  .runWith({
+    secrets: ['GEMINI_API_KEY', 'POSTGRES_PASSWORD'],
+    timeoutSeconds: 120,
+    memory: '1GB',
+  })
+  .https.onRequest(app);
 
 // Local dev server
 if (process.env.NODE_ENV === 'development') {
