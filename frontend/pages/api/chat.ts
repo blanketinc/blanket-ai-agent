@@ -27,9 +27,19 @@ export default async function handler(
   const { messages, conversationId } = req.body;
   const authHeader = req.headers.authorization || '';
 
-  // Extract the last user message
+  // Extract the last user message — AI SDK v6 uses parts[], not content
   const lastMessage = messages?.[messages.length - 1];
-  const userMessage = lastMessage?.content || '';
+  let userMessage = '';
+  if (lastMessage?.parts) {
+    // v6 UIMessage format: parts array with { type: 'text', text: '...' }
+    userMessage = lastMessage.parts
+      .filter((p: any) => p.type === 'text')
+      .map((p: any) => p.text)
+      .join('');
+  } else if (lastMessage?.content) {
+    // Fallback for older format
+    userMessage = lastMessage.content;
+  }
 
   const stream = createUIMessageStream({
     execute: async ({ writer }) => {
