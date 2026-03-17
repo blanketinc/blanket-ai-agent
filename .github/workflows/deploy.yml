@@ -36,19 +36,19 @@ jobs:
       - name: Deploy to Staging
         if: github.ref == 'refs/heads/develop'
         working-directory: backend
-        run: firebase deploy --only functions:api --project blanket-staging --token ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --only functions:aiAgent --project blanket-staging --token ${{ secrets.FIREBASE_TOKEN }}
       
       - name: Deploy to Production
         if: github.ref == 'refs/heads/main'
         working-directory: backend
-        run: firebase deploy --only functions:api --project blanket-alpha --token ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --only functions:aiAgent --project blanket-alpha --token ${{ secrets.FIREBASE_TOKEN }}
       
       - name: Deployment Summary
         run: |
           if [ "${{ github.ref }}" == "refs/heads/develop" ]; then
             echo "✅ Deployed to staging (blanket-staging)"
-            echo "URL: https://us-central1-blanket-staging.cloudfunctions.net/api/v2/ai-assistant/health"
+            echo "URL: https://us-central1-blanket-staging.cloudfunctions.net/aiAgent/v2/ai-assistant/health"
           else
             echo "✅ Deployed to production (blanket-alpha)"
-            echo "URL: https://us-central1-blanket-alpha.cloudfunctions.net/api/v2/ai-assistant/health"
+            echo "URL: https://us-central1-blanket-alpha.cloudfunctions.net/aiAgent/v2/ai-assistant/health"
           fi

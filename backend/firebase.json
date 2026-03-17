@@ -1,10 +1,19 @@
 {
-  "functions": {
-    "source": "functions",
-    "runtime": "nodejs20",
-    "timeoutSeconds": 120,
-    "memory": "1GB"
-  },
+  "functions": [
+    {
+      "source": "functions",
+      "codebase": "blanket-ai-agent",
+      "runtime": "nodejs20",
+      "timeoutSeconds": 120,
+      "memory": "1GB",
+      "ignore": [
+        "node_modules",
+        ".git",
+        "firebase-debug.log",
+        "firebase-debug.*.log"
+      ]
+    }
+  ],
   "emulators": {
     "functions": {
       "port": 5001
