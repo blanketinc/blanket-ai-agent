@@ -1,0 +1,268 @@
+/**
+ * Next.js API route that proxies to the Firebase Cloud Function
+ * and translates our custom SSE events into the Vercel AI SDK
+ * UI Message Stream protocol.
+ *
+ * This gives us token-by-token streaming on the frontend via useChat.
+ */
+import type { NextApiRequest, NextApiResponse } from 'next';
+import {
+  createUIMessageStream,
+  pipeUIMessageStreamToResponse,
+} from 'ai';
+
+const BACKEND_URL =
+  process.env.NEXT_PUBLIC_API_URL ||
+  'http://localhost:5001/v2/ai-assistant';
+
+export default async function handler(
+  req: NextApiRequest,
+  res: NextApiResponse
+) {
+  if (req.method !== 'POST') {
+    res.status(405).end();
+    return;
+  }
+
+  const { messages, conversationId } = req.body;
+  const authHeader = req.headers.authorization || '';
+
+  // Extract the last user message
+  const lastMessage = messages?.[messages.length - 1];
+  const userMessage = lastMessage?.content || '';
+
+  const stream = createUIMessageStream({
+    execute: async ({ writer }) => {
+      let textId = 'text_0';
+      let textStarted = false;
+      let reasoningId = 'reasoning_0';
+      let reasoningStarted = false;
+      let textCounter = 0;
+      let reasoningCounter = 0;
+
+      try {
+        const upstream = await fetch(`${BACKEND_URL}/chat/stream`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: authHeader,
+          },
+          body: JSON.stringify({
+            message: userMessage,
+            ...(conversationId ? { conversationId } : {}),
+          }),
+        });
+
+        if (!upstream.ok || !upstream.body) {
+          writer.write({
+            type: 'error',
+            errorText: `Backend returned ${upstream.status}`,
+          });
+          return;
+        }
+
+        const reader = upstream.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          buffer += decoder.decode(value, { stream: true });
+          const chunks = buffer.split('\n\n');
+          buffer = chunks.pop() || '';
+
+          for (const chunk of chunks) {
+            if (!chunk.trim() || chunk.startsWith(':')) continue;
+
+            let eventType = '';
+            let eventData = '';
+            for (const line of chunk.split('\n')) {
+              if (line.startsWith('event: '))
+                eventType = line.slice(7).trim();
+              if (line.startsWith('data: ')) eventData = line.slice(6);
+            }
+            if (!eventType || !eventData) continue;
+
+            let parsed: any;
+            try {
+              parsed = JSON.parse(eventData);
+            } catch {
+              continue;
+            }
+
+            switch (eventType) {
+              case 'thinking': {
+                // Close text block if open
+                if (textStarted) {
+                  writer.write({ type: 'text-end', id: textId });
+                  textStarted = false;
+                }
+                if (!reasoningStarted) {
+                  writer.write({
+                    type: 'reasoning-start',
+                    id: reasoningId,
+                  });
+                  reasoningStarted = true;
+                }
+                writer.write({
+                  type: 'reasoning-delta',
+                  id: reasoningId,
+                  delta: parsed.content || '',
+                });
+                break;
+              }
+
+              case 'text': {
+                // Close reasoning block if open
+                if (reasoningStarted) {
+                  writer.write({
+                    type: 'reasoning-end',
+                    id: reasoningId,
+                  });
+                  reasoningStarted = false;
+                  reasoningCounter++;
+                  reasoningId = `reasoning_${reasoningCounter}`;
+                }
+                if (!textStarted) {
+                  textCounter++;
+                  textId = `text_${textCounter}`;
+                  writer.write({ type: 'text-start', id: textId });
+                  textStarted = true;
+                }
+                writer.write({
+                  type: 'text-delta',
+                  id: textId,
+                  delta: parsed.content || '',
+                });
+                break;
+              }
+
+              case 'tool-call': {
+                // Close open blocks
+                if (textStarted) {
+                  writer.write({ type: 'text-end', id: textId });
+                  textStarted = false;
+                }
+                if (reasoningStarted) {
+                  writer.write({
+                    type: 'reasoning-end',
+                    id: reasoningId,
+                  });
+                  reasoningStarted = false;
+                  reasoningCounter++;
+                  reasoningId = `reasoning_${reasoningCounter}`;
+                }
+                writer.write({
+                  type: 'tool-input-start',
+                  toolCallId: parsed.id,
+                  toolName: parsed.tool,
+                });
+                writer.write({
+                  type: 'tool-input-available',
+                  toolCallId: parsed.id,
+                  toolName: parsed.tool,
+                  input: {
+                    action: parsed.action,
+                    params: parsed.params,
+                  },
+                });
+                break;
+              }
+
+              case 'tool-result': {
+                writer.write({
+                  type: 'tool-output-available',
+                  toolCallId: parsed.id || `tool_${Date.now()}`,
+                  output: {
+                    success: parsed.success,
+                    result: parsed.result,
+                    error: parsed.error,
+                  },
+                });
+                break;
+              }
+
+              case 'approval-request': {
+                if (textStarted) {
+                  writer.write({ type: 'text-end', id: textId });
+                  textStarted = false;
+                }
+                writer.write({
+                  type: 'data-approval-request' as any,
+                  id: parsed.id,
+                  data: {
+                    id: parsed.id,
+                    tool: parsed.tool,
+                    action: parsed.action,
+                    description: parsed.description,
+                    params: parsed.params,
+                    status: 'pending',
+                  },
+                });
+                break;
+              }
+
+              case 'diff': {
+                writer.write({
+                  type: 'data-diff' as any,
+                  id: `diff_${Date.now()}`,
+                  data: parsed,
+                });
+                break;
+              }
+
+              case 'error': {
+                writer.write({
+                  type: 'error',
+                  errorText: parsed.message || 'Unknown error',
+                });
+                break;
+              }
+
+              case 'done': {
+                // Close any open blocks
+                if (textStarted) {
+                  writer.write({ type: 'text-end', id: textId });
+                  textStarted = false;
+                }
+                if (reasoningStarted) {
+                  writer.write({
+                    type: 'reasoning-end',
+                    id: reasoningId,
+                  });
+                  reasoningStarted = false;
+                }
+                // Store conversationId as custom data
+                if (parsed.conversationId) {
+                  writer.write({
+                    type: 'data-conversation' as any,
+                    id: 'conv',
+                    data: {
+                      conversationId: parsed.conversationId,
+                      partial: parsed.partial || false,
+                    },
+                  });
+                }
+                break;
+              }
+            }
+          }
+        }
+
+        // Close any remaining open blocks
+        if (textStarted) writer.write({ type: 'text-end', id: textId });
+        if (reasoningStarted)
+          writer.write({ type: 'reasoning-end', id: reasoningId });
+      } catch (err: any) {
+        writer.write({
+          type: 'error',
+          errorText: err?.message || 'Failed to connect to backend',
+        });
+      }
+    },
+  });
+
+  pipeUIMessageStreamToResponse({ stream, response: res });
+}
