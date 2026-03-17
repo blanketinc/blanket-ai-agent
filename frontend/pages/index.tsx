@@ -267,7 +267,7 @@ export default function ChatPage() {
                         return (
                           <ThinkingBlock
                             key={i}
-                            content={part.reasoning || ''}
+                            content={part.text || ''}
                             isActive={isLastAssistant && isStreaming}
                           />
                         );
