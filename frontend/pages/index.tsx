@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
 import { useChat } from '@ai-sdk/react';
 import { DefaultChatTransport } from 'ai';
@@ -28,6 +28,8 @@ export default function ChatPage() {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [approvalProcessing, setApprovalProcessing] = useState(false);
   const [tokenRef, setTokenRef] = useState<string>('');
+  const tokenValueRef = useRef<string>('');
+  const conversationIdRef = useRef<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Auth check
@@ -45,6 +47,25 @@ export default function ChatPage() {
     return unsubscribe;
   }, [router]);
 
+  // Keep refs in sync for closure access
+  tokenValueRef.current = tokenRef;
+  conversationIdRef.current = conversationId;
+
+  // Stable transport that reads latest values from refs
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: '/api/chat',
+        headers: () => ({
+          Authorization: `Bearer ${tokenValueRef.current}`,
+        }),
+        body: () => ({
+          conversationId: conversationIdRef.current,
+        }),
+      }),
+    []
+  );
+
   // Vercel AI SDK useChat hook
   const {
     messages,
@@ -52,15 +73,7 @@ export default function ChatPage() {
     status,
     setMessages: setChatMessages,
   } = useChat({
-    transport: new DefaultChatTransport({
-      api: '/api/chat',
-      headers: () => ({
-        Authorization: `Bearer ${tokenRef}`,
-      }),
-      body: () => ({
-        conversationId,
-      }),
-    }),
+    transport,
     onError: (error) => {
       console.error('Chat error:', error);
     },
