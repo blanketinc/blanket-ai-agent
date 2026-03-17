@@ -4,6 +4,7 @@ import ThinkingBlock from './ThinkingBlock';
 import ToolCallDisplay from './ToolCallDisplay';
 import DiffView from './DiffView';
 import ApprovalButtons from './ApprovalButtons';
+import TypewriterText from './TypewriterText';
 
 interface ToolCall {
   tool: string;
@@ -75,9 +76,11 @@ export default function ChatMessage({
                 );
               case 'text':
                 return (
-                  <div key={i} className={styles.streamedText}>
-                    <ReactMarkdown>{part.content || ''}</ReactMarkdown>
-                  </div>
+                  <TypewriterText
+                    key={i}
+                    fullText={part.content || ''}
+                    isStreaming={isStreaming}
+                  />
                 );
               case 'tool-call':
                 return part.toolCall ? (
@@ -109,9 +112,7 @@ export default function ChatMessage({
                 return null;
             }
           })}
-          {isStreaming && parts.length > 0 && parts[parts.length - 1].type === 'text' && (
-            <span className={styles.streamCursor} />
-          )}
+          {/* cursor handled by TypewriterText */}
         </div>
       </div>
     );

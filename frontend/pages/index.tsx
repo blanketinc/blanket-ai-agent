@@ -65,116 +65,26 @@ export default function ChatPage() {
   }, [messages]);
 
   /**
-   * Typewriter buffer: queues text and reveals it gradually.
-   * targetTextRef holds the full text received so far;
-   * a timer drips characters into the displayed message parts.
-   */
-  const targetTextRef = useRef('');
-  const displayedLenRef = useRef(0);
-  const typewriterTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-
-  const CHARS_PER_TICK = 1; // characters to reveal per tick
-  const TICK_MS = 20; // ~50 chars/sec, similar to ChatGPT
-
-  const startTypewriter = useCallback(() => {
-    if (typewriterTimerRef.current) return; // already running
-    typewriterTimerRef.current = setInterval(() => {
-      const target = targetTextRef.current;
-      const displayed = displayedLenRef.current;
-      if (displayed >= target.length) return; // caught up, keep timer alive for future chunks
-
-      const nextLen = Math.min(displayed + CHARS_PER_TICK, target.length);
-      const delta = target.slice(displayed, nextLen);
-      displayedLenRef.current = nextLen;
-
-      // Update the last text part in the message
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last && last.role === 'assistant' && last.isStreaming) {
-          const parts = last.parts || [];
-          const lastPart = parts[parts.length - 1];
-          if (lastPart && lastPart.type === 'text') {
-            lastPart.content = target.slice(0, nextLen);
-          }
-          last.content = target.slice(0, nextLen);
-          last.parts = [...parts];
-        }
-        return [...updated];
-      });
-    }, TICK_MS);
-  }, []);
-
-  const stopTypewriter = useCallback(() => {
-    if (typewriterTimerRef.current) {
-      clearInterval(typewriterTimerRef.current);
-      typewriterTimerRef.current = null;
-    }
-    // Flush any remaining text
-    const target = targetTextRef.current;
-    if (target && displayedLenRef.current < target.length) {
-      setMessages((prev) => {
-        const updated = [...prev];
-        const last = updated[updated.length - 1];
-        if (last && last.role === 'assistant') {
-          const parts = last.parts || [];
-          const lastPart = parts[parts.length - 1];
-          if (lastPart && lastPart.type === 'text') {
-            lastPart.content = target;
-          }
-          last.content = target;
-          last.parts = [...parts];
-        }
-        return [...updated];
-      });
-      displayedLenRef.current = target.length;
-    }
-  }, []);
-
-  /**
    * Helper: update the last assistant message's parts.
+   * Text chunks are merged into a single part; the TypewriterText
+   * component handles the visual animation independently.
    */
   const appendPart = useCallback((part: MessagePart) => {
-    // For text parts, feed the typewriter buffer instead of rendering immediately
-    if (part.type === 'text' && part.content) {
-      const isFirstText = targetTextRef.current.length === 0;
-      targetTextRef.current += part.content;
-
-      if (isFirstText) {
-        // Create the text part placeholder in messages
-        setMessages((prev) => {
-          const updated = [...prev];
-          const last = updated[updated.length - 1];
-          if (last && last.role === 'assistant' && last.isStreaming) {
-            const parts = last.parts || [];
-            parts.push({ type: 'text', content: '' });
-            last.parts = [...parts];
-          }
-          return [...updated];
-        });
-      }
-      startTypewriter();
-      return;
-    }
-
-    // For non-text parts, flush typewriter first then append normally
     setMessages((prev) => {
       const updated = [...prev];
       const last = updated[updated.length - 1];
       if (last && last.role === 'assistant' && last.isStreaming) {
         const parts = last.parts || [];
 
-        // Flush any buffered text before adding non-text part
-        if (targetTextRef.current) {
+        if (part.type === 'text' && part.content) {
           const lastPart = parts[parts.length - 1];
           if (lastPart && lastPart.type === 'text') {
-            lastPart.content = targetTextRef.current;
-            last.content = targetTextRef.current;
+            lastPart.content = (lastPart.content || '') + part.content;
+          } else {
+            parts.push(part);
           }
-          displayedLenRef.current = targetTextRef.current.length;
-        }
-
-        if (part.type === 'thinking') {
+          last.content += part.content;
+        } else if (part.type === 'thinking') {
           const lastPart = parts[parts.length - 1];
           if (lastPart && lastPart.type === 'thinking') {
             lastPart.content = (lastPart.content || '') + (part.content || '');
@@ -189,7 +99,7 @@ export default function ChatPage() {
       }
       return [...updated];
     });
-  }, [startTypewriter]);
+  }, []);
 
   /**
    * Helper: mark the last tool-call part as completed with result.
@@ -247,10 +157,6 @@ export default function ChatPage() {
       setSending(true);
       setWaitingForResponse(true);
       pendingApprovalRef.current = null;
-      // Reset typewriter buffer for new message
-      stopTypewriter();
-      targetTextRef.current = '';
-      displayedLenRef.current = 0;
 
       /** Hide typing indicator on first real event */
       const clearWaiting = () => setWaitingForResponse(false);
@@ -320,11 +226,6 @@ export default function ChatPage() {
 
           // Mark streaming as done (only on final done, not partial)
           if (!data.partial) {
-            // Flush remaining typewriter text and stop timer
-            stopTypewriter();
-            targetTextRef.current = '';
-            displayedLenRef.current = 0;
-
             setMessages((prev) => {
               const updated = [...prev];
               const last = updated[updated.length - 1];
@@ -357,7 +258,7 @@ export default function ChatPage() {
         setSending(false);
       }
     },
-    [sending, conversationId, router, appendPart, resolveToolCall, stopTypewriter]
+    [sending, conversationId, router, appendPart, resolveToolCall]
   );
 
   /**
