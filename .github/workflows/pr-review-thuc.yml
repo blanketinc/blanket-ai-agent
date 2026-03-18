@@ -16,5 +16,8 @@ jobs:
             -d '{
               "message": "Review this PR: ${{ github.event.pull_request.html_url }}\n\nTitle: ${{ github.event.pull_request.title }}\nAuthor: ${{ github.event.pull_request.user.login }}\nAction: ${{ github.event.action }}\n\nCheck out the PR, review the code changes, and leave feedback via gh pr review if you find issues. If it looks good, approve it.",
               "name": "GitHub PR",
-              "agentId": "thuc"
+              "agentId": "thuc",
+              "deliver": true,
+              "channel": "telegram",
+              "to": "7670560461"
             }'
