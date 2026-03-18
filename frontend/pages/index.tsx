@@ -77,9 +77,9 @@ export default function ChatPage() {
     onError: (error) => {
       console.error('Chat error:', error);
     },
-    onFinish: (message) => {
+    onFinish: ({ message }: any) => {
       // Extract conversationId from data-conversation parts
-      const convPart = message.parts?.find(
+      const convPart = message?.parts?.find(
         (p: any) => p.type === 'data-conversation'
       ) as any;
       if (convPart?.data?.conversationId && !convPart.data.partial) {
