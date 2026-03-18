@@ -14,7 +14,7 @@ jobs:
             -H "Authorization: Bearer ${{ secrets.OPENCLAW_HOOK_TOKEN }}" \
             -H "Content-Type: application/json" \
             -d '{
-              "message": "Review this PR: ${{ github.event.pull_request.html_url }}\n\nTitle: ${{ github.event.pull_request.title }}\nAuthor: ${{ github.event.pull_request.user.login }}\nAction: ${{ github.event.action }}\n\nCheck out the PR, review the code changes, and leave feedback via gh pr review if you find issues. If it looks good, approve it.",
+              "message": "Review this PR: ${{ github.event.pull_request.html_url }}\n\nTitle: ${{ github.event.pull_request.title }}\nAuthor: ${{ github.event.pull_request.user.login }}\nEvent: ${{ github.event.action }}\n\nCheck out the PR and review the latest code changes. If this is a synchronize event, new commits were pushed — re-review those changes. Leave feedback via gh pr review if you find issues. If it looks good, approve it.",
               "name": "GitHub PR",
               "agentId": "thuc",
               "deliver": true,
