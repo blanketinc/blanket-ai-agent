@@ -1,0 +1,20 @@
+name: PR Review by Thuc
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  notify-thuc:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Notify Thuc for PR Review
+        run: |
+          curl -X POST "${{ secrets.OPENCLAW_WEBHOOK_URL }}/hooks/agent" \
+            -H "Authorization: Bearer ${{ secrets.OPENCLAW_HOOK_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "message": "Review this PR: ${{ github.event.pull_request.html_url }}\n\nTitle: ${{ github.event.pull_request.title }}\nAuthor: ${{ github.event.pull_request.user.login }}\nAction: ${{ github.event.action }}\n\nCheck out the PR, review the code changes, and leave feedback via gh pr review if you find issues. If it looks good, approve it.",
+              "name": "GitHub PR",
+              "agentId": "thuc"
+            }'
