@@ -77,6 +77,15 @@ export default function ChatPage() {
     onError: (error) => {
       console.error('Chat error:', error);
     },
+    onFinish: (message) => {
+      // Extract conversationId from data-conversation parts
+      const convPart = message.parts?.find(
+        (p: any) => p.type === 'data-conversation'
+      ) as any;
+      if (convPart?.data?.conversationId && !convPart.data.partial) {
+        setConversationId(convPart.data.conversationId);
+      }
+    },
   });
 
   const isStreaming = status === 'streaming' || status === 'submitted';
@@ -142,8 +151,12 @@ export default function ChatPage() {
           responseText += `\n❌ ${data.message || 'Approval failed'}`;
           setApprovalProcessing(false);
         },
-        onDone: () => {
+        onDone: (data) => {
           setApprovalProcessing(false);
+          // Capture conversationId from approval response
+          if (data?.conversationId) {
+            setConversationId(data.conversationId);
+          }
           // Append the approval result as a new assistant message in the chat
           const parts: any[] = [];
           if (thinkingText) {
