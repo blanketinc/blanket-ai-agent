@@ -26,6 +26,7 @@ import {
   appendMessages,
   toGeminiHistory,
   buildMessage,
+  listConversations,
 } from '../../libs/conversation';
 import { blanketAPITool } from '../../mcp-tools/blanket-api';
 import { analyticsTool } from '../../mcp-tools/analytics';
@@ -70,10 +71,11 @@ You MUST think step-by-step before acting. Wrap your reasoning in <think>...</th
 - You can ONLY access data for the user's organization (${authContext.orgId}).
 - NEVER include deleted data in any response. All queries and API calls must filter out records where isDeleted=true. If a tool returns deleted records, exclude them from your response.
 - NEVER show internal IDs (UUIDs, database IDs, etc.) to the user. Always display human-readable names instead. Use IDs internally for tool calls, but only show names, titles, and labels in your responses.
+- **CRITICAL: Template IDs are UUIDs, not names.** When the user refers to a template by name, you MUST first call list_templates or get_template to resolve the name to its UUID. NEVER pass a template name as the templateId parameter — it will fail. Always look up the ID first.
 - For analytics queries, default to the last 7 days if no date range is specified.
 - When modifying templates, describe exactly what you plan to change. The system will ask the user for approval before executing.
 - When showing analytics results, format data in clear tables when possible.
-- If a tool call fails, explain the error in plain language and suggest alternatives.
+- If a tool call fails, explain the error in plain language and suggest alternatives. If a mutating action fails, automatically retry with corrected parameters instead of giving up.
 - Be concise but thorough. Restaurant managers are busy.
 - When you need more information, ask a clarifying question before proceeding.
 - For multi-step operations, explain your plan first, then execute step by step.`;
@@ -514,7 +516,7 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
           };
 
           const db = admin.firestore();
-          await db.collection(APPROVALS_COLLECTION).doc(approvalId).set({
+          const firestoreData: Record<string, any> = {
             ...approval,
             userId: authContext.userId,
             orgId: authContext.orgId,
@@ -523,7 +525,12 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
             // Store conversation state so we can resume after approval
             pendingContents: JSON.stringify(contents),
             pendingToolCallPart: JSON.stringify(part),
+          };
+          // Remove undefined values — Firestore rejects them
+          Object.keys(firestoreData).forEach((key) => {
+            if (firestoreData[key] === undefined) delete firestoreData[key];
           });
+          await db.collection(APPROVALS_COLLECTION).doc(approvalId).set(firestoreData);
 
           sendSSE(res, {
             type: 'approval-request',
@@ -797,6 +804,32 @@ router.post('/approve', authMiddleware, async (req: any, res) => {
   }
 
   res.end();
+});
+
+/**
+ * GET /conversations
+ *
+ * Returns a list of conversations for the authenticated user,
+ * ordered by most recently updated. Each entry has id, preview, updatedAt.
+ */
+router.get('/conversations', authMiddleware, async (req: any, res) => {
+  try {
+    const conversations = await listConversations(
+      req.auth.authId,
+      req.auth.orgId
+    );
+
+    return res.json({
+      success: true,
+      result: conversations,
+    });
+  } catch (error: any) {
+    console.error('List conversations error:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to list conversations',
+    });
+  }
 });
 
 /**

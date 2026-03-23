@@ -32,20 +32,46 @@ export default function ChatPage() {
   const conversationIdRef = useRef<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  const API_URL =
+    process.env.NEXT_PUBLIC_API_URL ||
+    'http://localhost:5001/v2/ai-assistant';
+
+  // Fetch conversation list from backend
+  const fetchConversations = useCallback(async (token?: string) => {
+    const t = token || tokenValueRef.current;
+    if (!t) return;
+    try {
+      const res = await fetch(`${API_URL}/conversations`, {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.result) {
+          setConversations(data.result);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch conversations:', e);
+    }
+  }, [API_URL]);
+
   // Auth check
   useEffect(() => {
     const unsubscribe = onAuthChange(async (firebaseUser) => {
       if (firebaseUser) {
         setUser(firebaseUser);
         const t = await getIdToken();
-        if (t) setTokenRef(t);
+        if (t) {
+          setTokenRef(t);
+          fetchConversations(t);
+        }
       } else {
         router.replace('/login');
       }
       setLoading(false);
     });
     return unsubscribe;
-  }, [router]);
+  }, [router, fetchConversations]);
 
   // Keep refs in sync for closure access
   tokenValueRef.current = tokenRef;
@@ -85,6 +111,8 @@ export default function ChatPage() {
       if (convPart?.data?.conversationId && !convPart.data.partial) {
         setConversationId(convPart.data.conversationId);
       }
+      // Refresh sidebar after each message
+      fetchConversations();
     },
   });
 
@@ -208,12 +236,36 @@ export default function ChatPage() {
   }, [setChatMessages]);
 
   const handleSelectConversation = useCallback(
-    (id: string) => {
+    async (id: string) => {
+      const token = await getIdToken();
+      if (!token) return;
+
       setConversationId(id);
-      setChatMessages([]);
       setSidebarOpen(false);
+
+      // Load conversation history
+      try {
+        const res = await fetch(`${API_URL}/history?conversationId=${id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.result?.messages) {
+            // Convert stored messages to AI SDK format
+            const uiMessages = data.result.messages.map((m: any, i: number) => ({
+              id: `hist-${id}-${i}`,
+              role: m.role,
+              parts: [{ type: 'text', text: m.content, state: 'done' }],
+            }));
+            setChatMessages(uiMessages);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load conversation:', e);
+        setChatMessages([]);
+      }
     },
-    [setChatMessages]
+    [setChatMessages, API_URL]
   );
 
   const handleSignOut = useCallback(async () => {

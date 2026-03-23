@@ -74,16 +74,27 @@ export async function appendMessages(
 
 /**
  * Convert stored messages to Gemini content format.
+ * Includes tool call context so the model remembers what actions were taken.
  */
 export function toGeminiHistory(
   messages: MCPMessage[]
 ): Array<{ role: string; parts: Array<{ text: string }> }> {
   return messages
     .filter((m) => m.role === 'user' || m.role === 'assistant')
-    .map((m) => ({
-      role: m.role === 'assistant' ? 'model' : 'user',
-      parts: [{ text: m.content }],
-    }));
+    .map((m) => {
+      let text = m.content;
+      // Append tool call context so the model remembers what it did
+      if (m.role === 'assistant' && m.toolCalls?.length) {
+        const toolSummary = m.toolCalls
+          .map((tc) => `[Tool: ${tc.tool}, action: ${tc.action}, params: ${JSON.stringify(tc.params)}, success: ${tc.success}]`)
+          .join('\n');
+        text = `${text}\n\n--- Tool calls made ---\n${toolSummary}`;
+      }
+      return {
+        role: m.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text }],
+      };
+    });
 }
 
 /**
@@ -100,6 +111,67 @@ export function buildMessage(
     timestamp: Date.now(),
     ...(toolCalls?.length ? { toolCalls } : {}),
   };
+}
+
+/**
+ * List conversations for a user, ordered by most recently updated.
+ * Returns lightweight summaries (no full message history).
+ */
+export async function listConversations(
+  userId: string,
+  orgId: string,
+  limit = 30
+): Promise<Array<{ id: string; preview: string; updatedAt: number; createdAt: number }>> {
+  if (await shouldUseMemory()) {
+    return listConversationsMemory(userId, limit);
+  }
+  return listConversationsFirestore(userId, orgId, limit);
+}
+
+function listConversationsMemory(
+  userId: string,
+  limit: number
+): Array<{ id: string; preview: string; updatedAt: number; createdAt: number }> {
+  const results: Array<{ id: string; preview: string; updatedAt: number; createdAt: number }> = [];
+  for (const conv of memoryStore.values()) {
+    if (conv.userId !== userId) continue;
+    const firstUserMsg = conv.messages.find((m) => m.role === 'user');
+    results.push({
+      id: conv.id,
+      preview: firstUserMsg?.content?.slice(0, 100) || 'New conversation',
+      updatedAt: conv.updatedAt,
+      createdAt: conv.createdAt,
+    });
+  }
+  return results
+    .sort((a, b) => b.updatedAt - a.updatedAt)
+    .slice(0, limit);
+}
+
+async function listConversationsFirestore(
+  userId: string,
+  orgId: string,
+  limit: number
+): Promise<Array<{ id: string; preview: string; updatedAt: number; createdAt: number }>> {
+  const db = admin.firestore();
+  const snapshot = await db
+    .collection(COLLECTION)
+    .where('userId', '==', userId)
+    .where('organizationId', '==', orgId)
+    .orderBy('updatedAt', 'desc')
+    .limit(limit)
+    .get();
+
+  return snapshot.docs.map((doc) => {
+    const data = doc.data();
+    const firstUserMsg = (data.messages || []).find((m: any) => m.role === 'user');
+    return {
+      id: doc.id,
+      preview: firstUserMsg?.content?.slice(0, 100) || 'New conversation',
+      updatedAt: data.updatedAt || 0,
+      createdAt: data.createdAt || 0,
+    };
+  });
 }
 
 // ─── In-Memory Implementation ──────────────────────────────────────────────
