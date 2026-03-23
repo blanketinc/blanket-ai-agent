@@ -10,6 +10,7 @@ import ThinkingBlock from '../components/ThinkingBlock';
 import ToolCallDisplay from '../components/ToolCallDisplay';
 import DiffView from '../components/DiffView';
 import ApprovalButtons from '../components/ApprovalButtons';
+import ChartRenderer from '../components/ChartRenderer';
 import ReactMarkdown from 'react-markdown';
 import styles from '../styles/Chat.module.css';
 
@@ -400,23 +401,31 @@ export default function ChatPage() {
                       case 'tool-invocation': {
                         const toolInvocation = part.toolInvocation;
                         const hasResult = toolInvocation.state === 'result';
+                        const isAnalytics = toolInvocation.toolName === 'blanket-analytics';
+                        const analyticsQuery = toolInvocation.input?.query;
+                        const analyticsData = hasResult ? toolInvocation.output?.result : null;
+
                         return (
-                          <ToolCallDisplay
-                            key={i}
-                            tool={toolInvocation.toolName}
-                            action={toolInvocation.input?.action || ''}
-                            params={toolInvocation.input?.params}
-                            isActive={!hasResult && isLastAssistant && isStreaming}
-                            result={
-                              hasResult
-                                ? {
-                                    success: toolInvocation.output?.success ?? true,
-                                    result: toolInvocation.output?.result,
-                                    error: toolInvocation.output?.error,
-                                  }
-                                : undefined
-                            }
-                          />
+                          <div key={i}>
+                            <ToolCallDisplay
+                              tool={toolInvocation.toolName}
+                              action={toolInvocation.input?.action || toolInvocation.input?.query || ''}
+                              params={toolInvocation.input?.params}
+                              isActive={!hasResult && isLastAssistant && isStreaming}
+                              result={
+                                hasResult
+                                  ? {
+                                      success: toolInvocation.output?.success ?? true,
+                                      result: isAnalytics ? undefined : toolInvocation.output?.result,
+                                      error: toolInvocation.output?.error,
+                                    }
+                                  : undefined
+                              }
+                            />
+                            {isAnalytics && hasResult && analyticsData && (
+                              <ChartRenderer queryType={analyticsQuery} data={analyticsData} />
+                            )}
+                          </div>
                         );
                       }
 
