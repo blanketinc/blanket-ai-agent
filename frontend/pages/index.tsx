@@ -442,6 +442,15 @@ export default function ChatPage() {
                           />
                         );
 
+                      case 'data-analytics':
+                        return part.data ? (
+                          <ChartRenderer
+                            key={i}
+                            queryType={part.data.queryType}
+                            data={part.data.result}
+                          />
+                        ) : null;
+
                       case 'data-diff':
                         return part.data ? (
                           <DiffView
