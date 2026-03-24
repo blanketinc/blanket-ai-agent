@@ -49,6 +49,8 @@ export default async function handler(
       let reasoningStarted = false;
       let textCounter = 0;
       let reasoningCounter = 0;
+      // Track analytics tool calls so we can emit chart data parts
+      const analyticsToolCalls = new Map<string, string>(); // toolCallId -> queryType
 
       try {
         const upstream = await fetch(`${BACKEND_URL}/chat/stream`, {
@@ -101,6 +103,8 @@ export default async function handler(
             } catch {
               continue;
             }
+
+            console.log('[proxy]', eventType, eventType === 'tool-call' ? parsed.id : '', eventType === 'tool-result' ? parsed.id : '');
 
             switch (eventType) {
               case 'thinking': {
@@ -164,6 +168,10 @@ export default async function handler(
                   reasoningCounter++;
                   reasoningId = `reasoning_${reasoningCounter}`;
                 }
+                // Track analytics tool calls for chart rendering
+                if (parsed.tool === 'blanket-analytics') {
+                  analyticsToolCalls.set(parsed.id, parsed.params?.query || parsed.action || '');
+                }
                 writer.write({
                   type: 'tool-input-start',
                   toolCallId: parsed.id,
@@ -182,15 +190,28 @@ export default async function handler(
               }
 
               case 'tool-result': {
+                const resultId = parsed.id || `tool_${Date.now()}`;
                 writer.write({
                   type: 'tool-output-available',
-                  toolCallId: parsed.id || `tool_${Date.now()}`,
+                  toolCallId: resultId,
                   output: {
                     success: parsed.success,
                     result: parsed.result,
                     error: parsed.error,
                   },
                 });
+                // Emit analytics chart data as a custom part
+                const queryType = analyticsToolCalls.get(resultId);
+                if (queryType && parsed.success && parsed.result) {
+                  writer.write({
+                    type: 'data-analytics' as any,
+                    id: `chart_${resultId}`,
+                    data: {
+                      queryType,
+                      result: parsed.result,
+                    },
+                  });
+                }
                 break;
               }
 
