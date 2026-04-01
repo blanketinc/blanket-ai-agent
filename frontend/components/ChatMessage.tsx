@@ -4,6 +4,7 @@ import ThinkingBlock from './ThinkingBlock';
 import ToolCallDisplay from './ToolCallDisplay';
 import DiffView from './DiffView';
 import ApprovalButtons from './ApprovalButtons';
+import AgentQuestion, { QuestionOption } from './AgentQuestion';
 import TypewriterText from './TypewriterText';
 
 interface ToolCall {
@@ -14,7 +15,7 @@ interface ToolCall {
 
 /** A part of a streaming message — rendered in order */
 export interface MessagePart {
-  type: 'thinking' | 'text' | 'tool-call' | 'tool-result' | 'approval-request' | 'diff';
+  type: 'thinking' | 'text' | 'tool-call' | 'tool-result' | 'approval-request' | 'question' | 'diff';
   content?: string;
   toolCall?: {
     id: string;
@@ -29,6 +30,14 @@ export interface MessagePart {
     description: string;
     status?: 'pending' | 'approved' | 'rejected';
   };
+  question?: {
+    id: string;
+    prompt: string;
+    options: QuestionOption[];
+    multiSelect: boolean;
+    answered?: boolean;
+    selectedValues?: string[];
+  };
   diff?: { before: any; after: any };
 }
 
@@ -41,6 +50,7 @@ interface ChatMessageProps {
   isStreaming?: boolean;
   onApprove?: (approvalId: string) => void;
   onReject?: (approvalId: string) => void;
+  onAnswerQuestion?: (questionId: string, selectedValues: string[], selectedLabels: string[]) => void;
   approvalProcessing?: boolean;
 }
 
@@ -52,6 +62,7 @@ export default function ChatMessage({
   isStreaming,
   onApprove,
   onReject,
+  onAnswerQuestion,
   approvalProcessing,
 }: ChatMessageProps) {
   const isUser = role === 'user';
@@ -106,6 +117,19 @@ export default function ChatMessage({
                     onApprove={() => onApprove?.(part.approval!.id)}
                     onReject={() => onReject?.(part.approval!.id)}
                     disabled={approvalProcessing}
+                  />
+                ) : null;
+              case 'question':
+                return part.question ? (
+                  <AgentQuestion
+                    key={i}
+                    id={part.question.id}
+                    prompt={part.question.prompt}
+                    options={part.question.options}
+                    multiSelect={part.question.multiSelect}
+                    onAnswer={(qId, vals, labels) => onAnswerQuestion?.(qId, vals, labels)}
+                    answered={part.question.answered}
+                    selectedValues={part.question.selectedValues}
                   />
                 ) : null;
               default:

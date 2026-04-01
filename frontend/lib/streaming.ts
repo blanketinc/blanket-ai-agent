@@ -15,6 +15,7 @@ export type SSEEventType =
   | 'tool-call'
   | 'tool-result'
   | 'approval-request'
+  | 'question'
   | 'diff'
   | 'error'
   | 'done';
@@ -60,6 +61,13 @@ export interface ApprovalRequestData {
   };
 }
 
+export interface QuestionData {
+  id: string;
+  prompt: string;
+  options: { label: string; value: string; description?: string }[];
+  multiSelect: boolean;
+}
+
 export interface DiffData {
   before: any;
   after: any;
@@ -78,6 +86,7 @@ export interface StreamCallbacks {
   onToolCall?: (data: ToolCallData) => void;
   onToolResult?: (data: ToolResultData) => void;
   onApprovalRequest?: (data: ApprovalRequestData) => void;
+  onQuestion?: (data: QuestionData) => void;
   onDiff?: (data: DiffData) => void;
   onError?: (data: { message: string }) => void;
   onDone?: (data: DoneData) => void;
@@ -225,6 +234,9 @@ function dispatchEvent(
       break;
     case 'approval-request':
       callbacks.onApprovalRequest?.(data);
+      break;
+    case 'question':
+      callbacks.onQuestion?.(data);
       break;
     case 'diff':
       callbacks.onDiff?.(data);

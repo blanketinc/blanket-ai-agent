@@ -1,3 +1,4 @@
+import { useState, useEffect, useRef } from 'react';
 import styles from '../styles/Chat.module.css';
 
 interface ToolCallDisplayProps {
@@ -36,8 +37,32 @@ export default function ToolCallDisplay({
   isActive,
   result,
 }: ToolCallDisplayProps) {
+  const [elapsed, setElapsed] = useState(0);
+  const mountTimeRef = useRef<number>(Date.now());
+  const finalTimeRef = useRef<number | null>(null);
+
+  // Tick while active, freeze when result arrives
+  useEffect(() => {
+    if (result && !finalTimeRef.current) {
+      finalTimeRef.current = Math.floor((Date.now() - mountTimeRef.current) / 1000);
+      setElapsed(finalTimeRef.current);
+      return;
+    }
+    const interval = setInterval(() => {
+      if (!finalTimeRef.current) {
+        setElapsed(Math.floor((Date.now() - mountTimeRef.current) / 1000));
+      }
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [result]);
+
   const toolLabel = TOOL_LABELS[tool] || tool;
   const actionLabel = ACTION_LABELS[action] || action;
+
+  const formatTime = (s: number) => {
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
 
   return (
     <div className={`${styles.toolCallDisplay} ${isActive ? styles.toolCallActive : ''}`}>
@@ -58,6 +83,7 @@ export default function ToolCallDisplay({
         ) : null}
         <span className={styles.toolCallLabel}>{toolLabel}</span>
         <span className={styles.toolCallAction}>{actionLabel}</span>
+        <span className={styles.toolCallTimer}>{formatTime(elapsed)}</span>
       </div>
       {result && !result.success && result.error && (
         <div className={styles.toolCallError}>{result.error}</div>

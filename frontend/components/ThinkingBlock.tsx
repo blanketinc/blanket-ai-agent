@@ -8,7 +8,18 @@ interface ThinkingBlockProps {
 
 export default function ThinkingBlock({ content, isActive }: ThinkingBlockProps) {
   const [expanded, setExpanded] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const contentRef = useRef<HTMLDivElement>(null);
+  const mountTimeRef = useRef<number>(Date.now());
+
+  // Always tick the timer — show how long ago this block appeared
+  useEffect(() => {
+    const interval = setInterval(() => {
+      const secs = Math.floor((Date.now() - mountTimeRef.current) / 1000);
+      setElapsed(secs);
+    }, 1000);
+    return () => clearInterval(interval);
+  }, []);
 
   // Auto-expand when actively thinking so user sees live text
   useEffect(() => {
@@ -23,6 +34,11 @@ export default function ThinkingBlock({ content, isActive }: ThinkingBlockProps)
       contentRef.current.scrollTop = contentRef.current.scrollHeight;
     }
   }, [content, isActive, expanded]);
+
+  const formatTime = (s: number) => {
+    if (s < 60) return `${s}s`;
+    return `${Math.floor(s / 60)}m ${s % 60}s`;
+  };
 
   return (
     <div className={`${styles.thinkingBlock} ${isActive ? styles.thinkingActive : ''}`}>
@@ -43,6 +59,7 @@ export default function ThinkingBlock({ content, isActive }: ThinkingBlockProps)
         <span className={styles.thinkingLabel}>
           {isActive ? 'Thinking...' : 'Thought process'}
         </span>
+        <span className={styles.thinkingTimer}>{formatTime(elapsed)}</span>
         <svg
           className={`${styles.thinkingChevron} ${expanded ? styles.thinkingChevronOpen : ''}`}
           width="12"
