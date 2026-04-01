@@ -30,14 +30,14 @@ async function shouldUseMemory(): Promise<boolean> {
     return false;
   }
 
-  // Test Firestore connectivity with a lightweight read
-  try {
-    await admin.firestore().collection(COLLECTION).limit(1).get();
+  // Local dev defaults to in-memory (Firestore writes typically fail without
+  // a service account). Set USE_FIRESTORE=true to override.
+  if (process.env.USE_FIRESTORE === 'true') {
     useMemory = false;
-    console.log('Conversation store: using Firestore');
-  } catch (err: any) {
+    console.log('Conversation store: using Firestore (USE_FIRESTORE=true)');
+  } else {
     useMemory = true;
-    console.log('Conversation store: using in-memory (Firestore unavailable locally)');
+    console.log('Conversation store: using in-memory (local dev)');
   }
 
   return useMemory;
