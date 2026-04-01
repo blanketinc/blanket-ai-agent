@@ -114,6 +114,32 @@ export function buildMessage(
 }
 
 /**
+ * Update a conversation's title.
+ */
+export async function updateConversationTitle(
+  conversationId: string,
+  userId: string,
+  title: string
+): Promise<void> {
+  if (await shouldUseMemory()) {
+    const conv = memoryStore.get(conversationId);
+    if (!conv) throw new Error(`Conversation not found: ${conversationId}`);
+    if (conv.userId !== userId) throw new Error('Access denied: conversation belongs to another user');
+    conv.title = title;
+    conv.updatedAt = Date.now();
+    return;
+  }
+
+  const db = admin.firestore();
+  const docRef = db.collection(COLLECTION).doc(conversationId);
+  const doc = await docRef.get();
+  if (!doc.exists) throw new Error(`Conversation not found: ${conversationId}`);
+  const data = doc.data() as MCPConversation;
+  if (data.userId !== userId) throw new Error('Access denied: conversation belongs to another user');
+  await docRef.update({ title, updatedAt: Date.now() });
+}
+
+/**
  * List conversations for a user, ordered by most recently updated.
  * Returns lightweight summaries (no full message history).
  */
@@ -121,7 +147,7 @@ export async function listConversations(
   userId: string,
   orgId: string,
   limit = 30
-): Promise<Array<{ id: string; preview: string; updatedAt: number; createdAt: number }>> {
+): Promise<Array<{ id: string; title: string; preview: string; updatedAt: number; createdAt: number }>> {
   if (await shouldUseMemory()) {
     return listConversationsMemory(userId, limit);
   }
@@ -131,13 +157,14 @@ export async function listConversations(
 function listConversationsMemory(
   userId: string,
   limit: number
-): Array<{ id: string; preview: string; updatedAt: number; createdAt: number }> {
-  const results: Array<{ id: string; preview: string; updatedAt: number; createdAt: number }> = [];
+): Array<{ id: string; title: string; preview: string; updatedAt: number; createdAt: number }> {
+  const results: Array<{ id: string; title: string; preview: string; updatedAt: number; createdAt: number }> = [];
   for (const conv of memoryStore.values()) {
     if (conv.userId !== userId) continue;
     const firstUserMsg = conv.messages.find((m) => m.role === 'user');
     results.push({
       id: conv.id,
+      title: conv.title || '',
       preview: firstUserMsg?.content?.slice(0, 100) || 'New conversation',
       updatedAt: conv.updatedAt,
       createdAt: conv.createdAt,
@@ -152,7 +179,7 @@ async function listConversationsFirestore(
   userId: string,
   orgId: string,
   limit: number
-): Promise<Array<{ id: string; preview: string; updatedAt: number; createdAt: number }>> {
+): Promise<Array<{ id: string; title: string; preview: string; updatedAt: number; createdAt: number }>> {
   const db = admin.firestore();
   const snapshot = await db
     .collection(COLLECTION)
@@ -167,6 +194,7 @@ async function listConversationsFirestore(
     const firstUserMsg = (data.messages || []).find((m: any) => m.role === 'user');
     return {
       id: doc.id,
+      title: data.title || '',
       preview: firstUserMsg?.content?.slice(0, 100) || 'New conversation',
       updatedAt: data.updatedAt || 0,
       createdAt: data.createdAt || 0,

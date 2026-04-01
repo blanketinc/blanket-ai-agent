@@ -235,6 +235,24 @@ export default async function handler(
                 break;
               }
 
+              case 'question': {
+                if (textStarted) {
+                  writer.write({ type: 'text-end', id: textId });
+                  textStarted = false;
+                }
+                writer.write({
+                  type: 'data-question' as any,
+                  id: parsed.id,
+                  data: {
+                    id: parsed.id,
+                    prompt: parsed.prompt,
+                    options: parsed.options,
+                    multiSelect: parsed.multiSelect,
+                  },
+                });
+                break;
+              }
+
               case 'diff': {
                 writer.write({
                   type: 'data-diff' as any,

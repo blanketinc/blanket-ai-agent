@@ -11,6 +11,8 @@ import ToolCallDisplay from '../components/ToolCallDisplay';
 import DiffView from '../components/DiffView';
 import ApprovalButtons from '../components/ApprovalButtons';
 import ChartRenderer from '../components/ChartRenderer';
+import AgentQuestion from '../components/AgentQuestion';
+import ThinkingIndicator from '../components/ThinkingIndicator';
 import ReactMarkdown from 'react-markdown';
 import styles from '../styles/Chat.module.css';
 
@@ -27,7 +29,16 @@ export default function ChatPage() {
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(true);
   const [approvalProcessing, setApprovalProcessing] = useState(false);
+  const [activeQuestion, setActiveQuestion] = useState<{
+    id: string;
+    prompt: string;
+    options: { label: string; value: string; description?: string }[];
+    multiSelect: boolean;
+  } | null>(null);
+  const answeredQuestionsRef = useRef<Set<string>>(new Set());
   const [tokenRef, setTokenRef] = useState<string>('');
   const tokenValueRef = useRef<string>('');
   const conversationIdRef = useRef<string | undefined>();
@@ -41,6 +52,7 @@ export default function ChatPage() {
   const fetchConversations = useCallback(async (token?: string) => {
     const t = token || tokenValueRef.current;
     if (!t) return;
+    setLoadingConversations(true);
     try {
       const res = await fetch(`${API_URL}/conversations`, {
         headers: { Authorization: `Bearer ${t}` },
@@ -53,6 +65,8 @@ export default function ChatPage() {
       }
     } catch (e) {
       console.error('Failed to fetch conversations:', e);
+    } finally {
+      setLoadingConversations(false);
     }
   }, [API_URL]);
 
@@ -123,6 +137,19 @@ export default function ChatPage() {
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages, status]);
+
+  // Detect question parts in streaming messages and show popover
+  useEffect(() => {
+    if (!messages.length) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role !== 'assistant') return;
+    const questionPart = lastMsg.parts?.find(
+      (p: any) => p.type === 'data-question' && !answeredQuestionsRef.current.has(p.data?.id)
+    ) as any;
+    if (questionPart?.data && !activeQuestion) {
+      setActiveQuestion(questionPart.data);
+    }
+  }, [messages, activeQuestion]);
 
   // Refresh token periodically
   useEffect(() => {
@@ -230,10 +257,24 @@ export default function ChatPage() {
     [setChatMessages]
   );
 
+  const handleAnswerQuestion = useCallback(
+    (questionId: string, _selectedValues: string[], selectedLabels: string[]) => {
+      answeredQuestionsRef.current.add(questionId);
+      setActiveQuestion(null);
+      const responseText = selectedLabels.length === 1
+        ? selectedLabels[0]
+        : selectedLabels.join(', ');
+      handleSend(responseText);
+    },
+    [handleSend]
+  );
+
   const handleNewChat = useCallback(() => {
     setChatMessages([]);
     setConversationId(undefined);
     setSidebarOpen(false);
+    setActiveQuestion(null);
+    answeredQuestionsRef.current.clear();
   }, [setChatMessages]);
 
   const handleSelectConversation = useCallback(
@@ -242,7 +283,9 @@ export default function ChatPage() {
       if (!token) return;
 
       setConversationId(id);
+      setChatMessages([]);
       setSidebarOpen(false);
+      setLoadingHistory(true);
 
       // Load conversation history
       try {
@@ -256,7 +299,7 @@ export default function ChatPage() {
             const uiMessages = data.result.messages.map((m: any, i: number) => ({
               id: `hist-${id}-${i}`,
               role: m.role,
-              parts: [{ type: 'text', text: m.content, state: 'done' }],
+              parts: [{ type: 'text', text: (m.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim(), state: 'done' }],
             }));
             setChatMessages(uiMessages);
           }
@@ -264,9 +307,36 @@ export default function ChatPage() {
       } catch (e) {
         console.error('Failed to load conversation:', e);
         setChatMessages([]);
+      } finally {
+        setLoadingHistory(false);
       }
     },
     [setChatMessages, API_URL]
+  );
+
+  const handleRename = useCallback(
+    async (id: string, title: string) => {
+      const token = await getIdToken();
+      if (!token) return;
+
+      try {
+        await fetch(`${API_URL}/rename`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ conversationId: id, title }),
+        });
+
+        setConversations((prev: any[]) =>
+          prev.map((c: any) => (c.id === id ? { ...c, title } : c))
+        );
+      } catch (e) {
+        console.error('Failed to rename conversation:', e);
+      }
+    },
+    [API_URL]
   );
 
   const handleSignOut = useCallback(async () => {
@@ -291,8 +361,10 @@ export default function ChatPage() {
         <ChatHistory
           conversations={conversations}
           activeId={conversationId}
+          loading={loadingConversations}
           onSelect={handleSelectConversation}
           onNew={handleNewChat}
+          onRename={handleRename}
         />
       </div>
 
@@ -328,7 +400,17 @@ export default function ChatPage() {
         </header>
 
         <div className={styles.messagesContainer}>
-          {messages.length === 0 && (
+          {loadingHistory && (
+            <div className={styles.skeletonContainer}>
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+            </div>
+          )}
+
+          {!loadingHistory && messages.length === 0 && (
             <div className={styles.welcome}>
               <h2>Blanket AI Agent</h2>
               <p>
@@ -470,26 +552,23 @@ export default function ChatPage() {
           })}
 
           {/* Typing indicator */}
-          {status === 'submitted' && (
-            <div className={styles.typingIndicator}>
-              <div className={styles.messageAvatar}>
-                <div className={styles.aiAvatar}>AI</div>
-              </div>
-              <div className={styles.typingBubble}>
-                <div className={styles.typingDots}>
-                  <span />
-                  <span />
-                  <span />
-                </div>
-                <span className={styles.typingLabel}>Thinking</span>
-              </div>
-            </div>
-          )}
+          {status === 'submitted' && <ThinkingIndicator />}
 
           <div ref={messagesEndRef} />
         </div>
 
         <div className={styles.inputContainer}>
+          {activeQuestion && (
+            <div className={styles.questionPopover}>
+              <AgentQuestion
+                id={activeQuestion.id}
+                prompt={activeQuestion.prompt}
+                options={activeQuestion.options}
+                multiSelect={activeQuestion.multiSelect}
+                onAnswer={handleAnswerQuestion}
+              />
+            </div>
+          )}
           <ChatInput onSend={handleSend} disabled={isStreaming || approvalProcessing} />
         </div>
       </div>

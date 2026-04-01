@@ -19,6 +19,7 @@ import {
   MCPToolCallRecord,
   SSEEvent,
   ApprovalRequest,
+  AgentQuestion,
   MUTATING_ACTIONS,
 } from '../../libs/mcp-types';
 import {
@@ -27,6 +28,7 @@ import {
   toGeminiHistory,
   buildMessage,
   listConversations,
+  updateConversationTitle,
 } from '../../libs/conversation';
 import { blanketAPITool } from '../../mcp-tools/blanket-api';
 import { analyticsTool } from '../../mcp-tools/analytics';
@@ -67,17 +69,43 @@ You MUST think step-by-step before acting. Wrap your reasoning in <think>...</th
 - <think>The user wants to add a temperature check to all opening checklists. Let me first find all templates that match "opening" to see what we're working with.</think>
 - <think>I found 5 templates. Let me check which ones already have temperature checks before suggesting changes.</think>
 
+## Interactive Questions — MANDATORY
+You MUST use <question> tags for ALL of these situations. NEVER ask yes/no or multiple-choice questions as plain text:
+1. **Confirmations** — "Do you approve?", "Should I proceed?", "Do you want to continue?"
+2. **Choosing between options** — "Which template?", "Which location?"
+3. **Yes/No decisions** — Any time you need a yes or no answer
+
+The user sees interactive clickable buttons. Plain text questions like "Do you approve this change?" are broken UX — always use <question> instead.
+
+Format:
+<question prompt="Which template do you want to update?" multiSelect="false">
+  <option value="template-uuid-1" description="Opens daily at 6am">Morning Opening Checklist</option>
+  <option value="template-uuid-2" description="Closes nightly at 10pm">Evening Closing Checklist</option>
+</question>
+
+For confirmations, use this pattern:
+<question prompt="Update all 11 tasks in 'A 1New List Copy' from 2 points to 3 points?" multiSelect="false">
+  <option value="yes">Yes, make the change</option>
+  <option value="no">No, cancel</option>
+</question>
+
+- Use multiSelect="true" when the user can pick multiple options (e.g., "Which locations should this apply to?")
+- Use multiSelect="false" (default) for single-choice and yes/no questions
+- Always include a description when it helps the user decide
+- NEVER write "Do you approve?", "Shall I proceed?", or similar as plain text — always use <question> tags
+- NEVER use numbered lists for choices — always use <question> tags
+
 ## Important Rules
 - You can ONLY access data for the user's organization (${authContext.orgId}).
 - NEVER include deleted data in any response. All queries and API calls must filter out records where isDeleted=true. If a tool returns deleted records, exclude them from your response.
 - NEVER show internal IDs (UUIDs, database IDs, etc.) to the user. Always display human-readable names instead. Use IDs internally for tool calls, but only show names, titles, and labels in your responses.
 - **CRITICAL: Template IDs are UUIDs, not names.** When the user refers to a template by name, you MUST first call list_templates or get_template to resolve the name to its UUID. NEVER pass a template name as the templateId parameter — it will fail. Always look up the ID first.
 - For analytics queries, default to the last 7 days if no date range is specified.
-- When modifying templates, describe exactly what you plan to change. The system will ask the user for approval before executing.
+- When modifying templates, describe what you plan to change, then use a <question> tag to ask for approval before executing.
 - When showing analytics results, format data in clear tables when possible.
 - If a tool call fails, explain the error in plain language and suggest alternatives. If a mutating action fails, automatically retry with corrected parameters instead of giving up.
 - Be concise but thorough. Restaurant managers are busy.
-- When you need more information, ask a clarifying question before proceeding.
+- When you need more information, ask a clarifying question using <question> tags before proceeding.
 - For multi-step operations, explain your plan first, then execute step by step.`;
 }
 
@@ -105,6 +133,51 @@ function extractAndStreamThinking(
     });
   }
   return text.replace(thinkRegex, '').trim();
+}
+
+/**
+ * Parse <question>...</question> blocks from text and stream them as question events.
+ * Format: <question prompt="..." multiSelect="false">
+ *   <option value="val1" description="optional desc">Label 1</option>
+ *   <option value="val2">Label 2</option>
+ * </question>
+ * Returns the remaining text with question blocks removed.
+ */
+function extractAndStreamQuestions(
+  text: string,
+  res: express.Response
+): string {
+  const questionRegex = /<question\s+prompt="([^"]*)"(?:\s+multiSelect="(true|false)")?\s*>([\s\S]*?)<\/question>/g;
+  const optionRegex = /<option\s+value="([^"]*)"(?:\s+description="([^"]*)")?\s*>([\s\S]*?)<\/option>/g;
+
+  let match;
+  while ((match = questionRegex.exec(text)) !== null) {
+    const prompt = match[1];
+    const multiSelect = match[2] === 'true';
+    const optionsBlock = match[3];
+
+    const options: { label: string; value: string; description?: string }[] = [];
+    let optMatch;
+    while ((optMatch = optionRegex.exec(optionsBlock)) !== null) {
+      options.push({
+        value: optMatch[1],
+        description: optMatch[2] || undefined,
+        label: optMatch[3].trim(),
+      });
+    }
+
+    if (options.length > 0) {
+      const question: AgentQuestion = {
+        id: `q-${uuidv4().slice(0, 8)}`,
+        prompt,
+        options,
+        multiSelect,
+      };
+      sendSSE(res, { type: 'question', data: question });
+    }
+  }
+
+  return text.replace(questionRegex, '').trim();
 }
 
 /**
@@ -179,7 +252,7 @@ router.post('/chat', authMiddleware, async (req: any, res) => {
 
     // Initial Gemini call
     let response = await genAI.models.generateContent({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-pro-preview',
       contents: [
         ...history,
         { role: 'user', parts: [{ text: message }] },
@@ -252,7 +325,7 @@ router.post('/chat', authMiddleware, async (req: any, res) => {
       });
 
       response = await genAI.models.generateContent({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-pro-preview',
         contents,
         config: {
           systemInstruction: getSystemPrompt(authContext),
@@ -265,14 +338,15 @@ router.post('/chat', authMiddleware, async (req: any, res) => {
       rounds++;
     }
 
-    // Extract final text response
-    const finalText =
+    // Extract final text response and strip <think> blocks
+    const rawFinalText =
       response.candidates?.[0]?.content?.parts
         ?.filter((p: any) => p.text)
         .map((p: any) => p.text)
         .join('') ||
       response.text ||
       'I was unable to generate a response. Please try again.';
+    const finalText = rawFinalText.replace(/<think>[\s\S]*?<\/think>/g, '').trim();
 
     // Persist messages to Firestore
     const userMsg = buildMessage('user', message);
@@ -379,7 +453,7 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
     while (rounds <= MAX_TOOL_ROUNDS) {
       // Use streaming for Gemini calls
       const streamResponse = await genAI.models.generateContentStream({
-        model: 'gemini-2.5-flash',
+        model: 'gemini-3.1-pro-preview',
         contents,
         config: {
           systemInstruction: getSystemPrompt(authContext),
@@ -429,9 +503,11 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
 
           const remaining = accumulatedText.slice(lastIndex);
 
-          // Only stream text that doesn't contain a partial <think> tag
-          if (!remaining.includes('<think')) {
+          // Only stream text that doesn't contain a partial <think> or <question tag
+          if (!remaining.includes('<think') && !remaining.includes('<question')) {
             cleanText += remaining;
+            // Extract any complete <question> blocks before sending text
+            cleanText = extractAndStreamQuestions(cleanText, res);
             // Only send the NEW text since last SSE (delta)
             const delta = cleanText.slice(streamedTextLength);
             if (delta) {
@@ -447,7 +523,8 @@ router.post('/chat/stream', authMiddleware, async (req: any, res) => {
 
       // Handle any remaining text that wasn't streamed
       if (accumulatedText.trim()) {
-        const cleaned = extractAndStreamThinking(accumulatedText, res);
+        let cleaned = extractAndStreamThinking(accumulatedText, res);
+        cleaned = extractAndStreamQuestions(cleaned, res);
         if (cleaned) {
           sendSSE(res, { type: 'text', data: { content: cleaned } });
           fullResponseText += cleaned;
@@ -758,7 +835,7 @@ router.post('/approve', authMiddleware, async (req: any, res) => {
 
     const tools = [{ functionDeclarations: mcpServer.getToolDefinitions() }];
     const streamResponse = await genAI.models.generateContentStream({
-      model: 'gemini-2.5-flash',
+      model: 'gemini-3.1-pro-preview',
       contents,
       config: {
         systemInstruction: getSystemPrompt(authContext),
@@ -867,6 +944,36 @@ router.get('/history', authMiddleware, async (req: any, res) => {
     return res.status(500).json({
       success: false,
       error: 'Failed to fetch conversation history',
+    });
+  }
+});
+
+/**
+ * PATCH /rename
+ *
+ * Body: { conversationId: string, title: string }
+ * Renames a conversation.
+ */
+router.patch('/rename', authMiddleware, async (req: any, res) => {
+  try {
+    const { conversationId: convId, title } = req.body;
+
+    if (!convId || typeof title !== 'string') {
+      return res.status(400).json({
+        success: false,
+        error: 'conversationId and title are required',
+      });
+    }
+
+    await updateConversationTitle(convId, req.auth.authId, title.slice(0, 100));
+
+    return res.json({ success: true });
+  } catch (error: any) {
+    console.error('Rename conversation error:', error);
+    const status = error.message?.includes('Access denied') ? 403 : 500;
+    return res.status(status).json({
+      success: false,
+      error: error.message || 'Failed to rename conversation',
     });
   }
 });
