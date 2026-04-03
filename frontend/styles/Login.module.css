@@ -99,3 +99,29 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.otpInput {
+  text-align: center;
+  font-size: 1.5rem;
+  font-weight: 600;
+  letter-spacing: 0.5rem;
+  font-variant-numeric: tabular-nums;
+}
+
+.secondaryButton {
+  width: 100%;
+  padding: 0.625rem;
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 1rem;
+}
+
+.secondaryButton:hover {
+  background: var(--primary-light, #eff6ff);
+}
