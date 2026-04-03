@@ -1,254 +1,175 @@
 /**
- * MCP Tool: Analytics
+ * MCP Tool: Blanket Analytics
  *
- * Queries PostgreSQL directly for analytics and insights.
- * All queries are filtered by the user's organizationId and locationIds.
+ * Proxies to existing Cloud Functions report endpoints instead of running
+ * raw SQL. This gives the AI agent access to all 25+ battle-tested report
+ * endpoints across list entries, audits, issues, actions, labels, and courses.
  *
- * Tables used:
- *  - listentries: status enum (not started, started, completed, missed,
- *                 pending review, in review, rejected, approved),
- *                 createdDate/submittedAt/startedAt as bigint (ms)
- *  - locations:   joins via listentries.locationId = locations.oldLocationId
+ * Request format: POST { data: { organizationId, startDate, endDate, locationIds, ...params } }
+ * Response format varies by endpoint — the generic handler unwraps gracefully.
  */
 
+import axios from 'axios';
 import { MCPTool, MCPAuthContext } from '../libs/mcp-types';
-import { pool } from '../core/database';
+import { appConfig } from '../core/config';
 
-type AnalyticsQuery =
-  | 'completion_rates'
-  | 'failure_analysis'
-  | 'performance_trends'
-  | 'location_comparison';
+// ─── Report Route Map ──────────────────────────────────────────────────────
+// Maps each report enum value to its Cloud Functions API path.
 
-async function queryCompletionRates(params: any, context: MCPAuthContext) {
-  const { startDate, endDate, locationIds } = params;
-  const filterLocations = locationIds || context.locationIds;
+const REPORT_ROUTES: Record<string, string> = {
+  // List Entry Reports (v2)
+  list_entries_detail: '/v2/reports/list-entries/list',
+  list_entries_scheduled: '/v2/reports/list-entries/scheduled-list',
+  list_entries_completed: '/v2/reports/list-entries/completed-lists',
 
-  const sql = `
-    SELECT
-      l.name AS location,
-      l."oldLocationId" AS location_id,
-      COUNT(*) AS total,
-      COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) AS completed,
-      ROUND(
-        COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-        2
-      ) AS completion_rate
-    FROM listentries le
-    JOIN locations l ON le."locationId" = l."oldLocationId"
-    WHERE
-      le."organizationId" = $1
-      AND le."isDeleted" = false
-      AND to_timestamp(le."createdDate" / 1000) BETWEEN $2 AND $3
-      ${filterLocations?.length ? 'AND le."locationId" = ANY($4)' : ''}
-    GROUP BY l.name, l."oldLocationId"
-    ORDER BY completion_rate ASC;
-  `;
+  // Audit Entry Reports (v1)
+  audit_score_by_time: '/v1/auditEntries/reports/getScoreByTime',
+  audit_average: '/v1/auditEntries/reports/average',
+  audit_compact_entries: '/v1/auditEntries/reports/compactAuditEntries',
+  audit_failed_tasks: '/v1/auditEntries/reports/failedTasksSummary',
+  audit_details_by_time: '/v1/auditEntries/reports/detailsByTime',
+  audit_details_by_location: '/v1/auditEntries/reports/detailsByLocation',
+  audit_template_summary: '/v1/auditEntries/reports/taskListTemplateSummary',
+  audit_scheduled_by_location: '/v1/auditEntries/reports/scheduledListByLocation',
+  audit_location_summaries: '/v1/auditEntries/reports/locationSummariesByAudit',
 
-  const values: any[] = [context.orgId, startDate, endDate];
-  if (filterLocations?.length) {
-    values.push(filterLocations);
-  }
+  // Issues Reports (v1)
+  issues_total: '/v1/issues/report/total',
+  issues_by_location: '/v1/issues/report/location',
+  issues_by_category: '/v1/issues/report/category',
+  issues_by_priority: '/v1/issues/report/priority',
 
-  const result = await pool.query(sql, values);
-  return {
-    rows: result.rows,
-    totalLocations: result.rowCount,
-    dateRange: { startDate, endDate },
-  };
-}
+  // Actions Reports (v1)
+  actions_total: '/v1/actions/report/total',
+  actions_by_location: '/v1/actions/report/location',
+  actions_by_priority: '/v1/actions/report/priority',
 
-async function queryFailureAnalysis(params: any, context: MCPAuthContext) {
-  const { startDate, endDate, locationIds } = params;
-  const filterLocations = locationIds || context.locationIds;
+  // Label Reports (v1)
+  labels_by_time: '/v1/labelTransactions/report/time',
+  labels_by_item: '/v1/labelTransactions/report/labelItem',
+  labels_by_location: '/v1/labelTransactions/report/location',
 
-  const sql = `
-    SELECT
-      l.name AS location,
-      le.name AS template_name,
-      le.status,
-      COUNT(*) AS count,
-      le."userId" AS user_id
-    FROM listentries le
-    JOIN locations l ON le."locationId" = l."oldLocationId"
-    WHERE
-      le."organizationId" = $1
-      AND le."isDeleted" = false
-      AND le.status IN ('missed', 'not started', 'rejected')
-      AND to_timestamp(le."createdDate" / 1000) BETWEEN $2 AND $3
-      ${filterLocations?.length ? 'AND le."locationId" = ANY($4)' : ''}
-    GROUP BY l.name, le.name, le.status, le."userId"
-    ORDER BY count DESC
-    LIMIT 50;
-  `;
-
-  const values: any[] = [context.orgId, startDate, endDate];
-  if (filterLocations?.length) {
-    values.push(filterLocations);
-  }
-
-  const result = await pool.query(sql, values);
-  return {
-    rows: result.rows,
-    totalFailures: result.rows.reduce(
-      (sum: number, r: any) => sum + parseInt(r.count, 10),
-      0
-    ),
-    dateRange: { startDate, endDate },
-  };
-}
-
-async function queryPerformanceTrends(params: any, context: MCPAuthContext) {
-  const { startDate, endDate, locationIds, interval } = params;
-  const filterLocations = locationIds || context.locationIds;
-  const groupInterval = interval || 'week';
-
-  const sql = `
-    SELECT
-      date_trunc($5, to_timestamp(le."createdDate" / 1000)) AS period,
-      COUNT(*) AS total,
-      COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) AS completed,
-      ROUND(
-        COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-        2
-      ) AS completion_rate
-    FROM listentries le
-    WHERE
-      le."organizationId" = $1
-      AND le."isDeleted" = false
-      AND to_timestamp(le."createdDate" / 1000) BETWEEN $2 AND $3
-      ${filterLocations?.length ? 'AND le."locationId" = ANY($4)' : ''}
-    GROUP BY period
-    ORDER BY period ASC;
-  `;
-
-  const values: any[] = [context.orgId, startDate, endDate];
-  if (filterLocations?.length) {
-    values.push(filterLocations);
-  } else {
-    values.push(null); // placeholder for $4
-  }
-  values.push(groupInterval);
-
-  const result = await pool.query(sql, values);
-  return {
-    rows: result.rows,
-    interval: groupInterval,
-    dateRange: { startDate, endDate },
-  };
-}
-
-async function queryLocationComparison(params: any, context: MCPAuthContext) {
-  const { startDate, endDate, locationIds } = params;
-  const filterLocations = locationIds || context.locationIds;
-
-  const sql = `
-    SELECT
-      l.name AS location,
-      l."oldLocationId" AS location_id,
-      COUNT(*) AS total,
-      COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) AS completed,
-      COUNT(CASE WHEN le.status = 'missed' THEN 1 END) AS missed,
-      COUNT(CASE WHEN le.status IN ('not started') THEN 1 END) AS not_started,
-      ROUND(
-        COUNT(CASE WHEN le.status IN ('completed', 'approved') THEN 1 END) * 100.0
-        / NULLIF(COUNT(*), 0),
-        2
-      ) AS completion_rate,
-      ROUND(
-        AVG(
-          CASE WHEN le."submittedAt" IS NOT NULL AND le."startedAt" IS NOT NULL
-          THEN (le."submittedAt" - le."startedAt") / 60000.0
-          END
-        ),
-        1
-      ) AS avg_duration_minutes
-    FROM listentries le
-    JOIN locations l ON le."locationId" = l."oldLocationId"
-    WHERE
-      le."organizationId" = $1
-      AND le."isDeleted" = false
-      AND to_timestamp(le."createdDate" / 1000) BETWEEN $2 AND $3
-      ${filterLocations?.length ? 'AND le."locationId" = ANY($4)' : ''}
-    GROUP BY l.name, l."oldLocationId"
-    ORDER BY completion_rate DESC;
-  `;
-
-  const values: any[] = [context.orgId, startDate, endDate];
-  if (filterLocations?.length) {
-    values.push(filterLocations);
-  }
-
-  const result = await pool.query(sql, values);
-
-  // Compute org-wide average
-  const totalAll = result.rows.reduce(
-    (s: number, r: any) => s + parseInt(r.total, 10),
-    0
-  );
-  const completedAll = result.rows.reduce(
-    (s: number, r: any) => s + parseInt(r.completed, 10),
-    0
-  );
-  const orgAverage =
-    totalAll > 0 ? Math.round((completedAll / totalAll) * 10000) / 100 : 0;
-
-  return {
-    rows: result.rows,
-    orgAverage,
-    totalLocations: result.rowCount,
-    dateRange: { startDate, endDate },
-  };
-}
-
-const queryHandlers: Record<
-  AnalyticsQuery,
-  (params: any, context: MCPAuthContext) => Promise<any>
-> = {
-  completion_rates: queryCompletionRates,
-  failure_analysis: queryFailureAnalysis,
-  performance_trends: queryPerformanceTrends,
-  location_comparison: queryLocationComparison,
+  // Courses Reports (v2)
+  courses_summary: '/v2/courses/report/summary',
+  courses_performance: '/v2/courses/report/performance',
+  courses_user_performance: '/v2/courses/report/user-performance',
 };
+
+// ─── HTTP Client ───────────────────────────────────────────────────────────
+
+function getAxiosInstance(token: string) {
+  return axios.create({
+    baseURL: appConfig.apiBaseUrl,
+    timeout: 60000, // 60s — reports can be heavier than CRUD operations
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${token}`,
+    },
+  });
+}
+
+// ─── Generic Report Executor ───────────────────────────────────────────────
+
+async function executeReport(
+  report: string,
+  startDate: string,
+  endDate: string,
+  locationIds: string[] | undefined,
+  extraParams: Record<string, any> | undefined,
+  context: MCPAuthContext
+): Promise<any> {
+  const route = REPORT_ROUTES[report];
+  if (!route) {
+    throw new Error(`Unknown report: ${report}. Available: ${Object.keys(REPORT_ROUTES).join(', ')}`);
+  }
+
+  const client = getAxiosInstance(context.token);
+
+  const response = await client.post(route, {
+    data: {
+      organizationId: context.orgId,
+      startDate,
+      endDate,
+      locationIds: locationIds || context.locationIds,
+      ...(extraParams || {}),
+    },
+  });
+
+  // Unwrap response — v1 and v2 endpoints return slightly different shapes
+  return response.data?.data?.result ?? response.data?.data ?? response.data;
+}
+
+// ─── MCP Tool Definition ──────────────────────────────────────────────────
 
 export const analyticsTool: MCPTool = {
   name: 'blanket-analytics',
-  description:
-    'Query Blanket data for analytics and insights. Queries: completion_rates (completion % by location), failure_analysis (missed/failed lists breakdown), performance_trends (completion rates over time), location_comparison (side-by-side location metrics). All queries are scoped to the user\'s organization.',
+  description: `Pull reports from Blanket modules. Choose a report type and provide a date range.
+
+Report types by category:
+
+LIST ENTRIES: list_entries_detail (full list entry data with tasks), list_entries_scheduled (scheduled list pivot with completion status), list_entries_completed (compact completed summaries).
+
+AUDITS: audit_score_by_time (scores and earned points over time), audit_average (on-time/late/uncompleted averages), audit_compact_entries (minimal entry data for list views), audit_failed_tasks (failed/missed task breakdown with performer and location), audit_details_by_time (completion metrics by date), audit_details_by_location (completion metrics by location), audit_template_summary (summary per template with averages), audit_scheduled_by_location (scheduled vs completed per location), audit_location_summaries (each audit's performance by location).
+
+ISSUES: issues_total (summary counts), issues_by_location (by location), issues_by_category (by type/category), issues_by_priority (by priority level).
+
+ACTIONS: actions_total (action plan summary), actions_by_location (by location), actions_by_priority (by priority).
+
+LABELS: labels_by_time (label prints over time), labels_by_item (prints per label item), labels_by_location (prints per location).
+
+COURSES: courses_summary (enrollment/completion overview), courses_performance (top/bottom performing courses and users), courses_user_performance (per-user course metrics with pagination).
+
+All reports are scoped to the user's organization.`,
   requiresAuth: true,
 
   parameters: {
     type: 'object',
     properties: {
-      query: {
+      report: {
         type: 'string',
-        enum: [
-          'completion_rates',
-          'failure_analysis',
-          'performance_trends',
-          'location_comparison',
-        ],
-        description: 'The analytics query to run',
+        enum: Object.keys(REPORT_ROUTES),
+        description: 'The report to pull. See tool description for what each report returns.',
       },
-      params: {
+      startDate: {
+        type: 'string',
+        description:
+          'Start date in ISO 8601 format (e.g., 2026-03-27T00:00:00Z). Defaults to 7 days ago if omitted.',
+      },
+      endDate: {
+        type: 'string',
+        description:
+          'End date in ISO 8601 format (e.g., 2026-04-03T23:59:59Z). Defaults to now if omitted.',
+      },
+      locationIds: {
+        type: 'array',
+        description:
+          'Optional array of location IDs to filter by. Omit to include all user-accessible locations.',
+      },
+      extraParams: {
         type: 'object',
         description:
-          'Query parameters. All queries accept: { startDate (ISO string), endDate (ISO string), locationIds? (string[]) }. performance_trends also accepts: { interval?: "day"|"week"|"month" }.',
+          'Optional endpoint-specific parameters. For audits: { auditIds?, auditNames? }. For labels: { labelTemplateIds?, categoryIds?, timezone?, groupBy? }. For courses: { courseIds?, query?, page?, pageSize? }. For list entries: { listTemplateIds?, listTemplateName? }.',
       },
     },
-    required: ['query', 'params'],
+    required: ['report'],
   },
 
   execute: async (params: any, context: MCPAuthContext) => {
-    const { query, params: queryParams } = params;
+    const { report, startDate, endDate, locationIds, extraParams } = params;
 
-    const handler = queryHandlers[query as AnalyticsQuery];
-    if (!handler) {
-      throw new Error(`Unknown analytics query: ${query}`);
-    }
+    // Default date range to last 7 days
+    const now = new Date();
+    const resolvedEnd = endDate || now.toISOString();
+    const resolvedStart =
+      startDate || new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
 
-    return handler(queryParams || {}, context);
+    return executeReport(
+      report,
+      resolvedStart,
+      resolvedEnd,
+      locationIds,
+      extraParams,
+      context
+    );
   },
 };
