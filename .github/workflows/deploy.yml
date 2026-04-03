@@ -41,9 +41,7 @@ jobs:
           POSTGRES_HOST=${{ secrets.STAGING_POSTGRES_HOST }}
           POSTGRES_PORT=5432
           POSTGRES_USER=blanket-app
-          POSTGRES_PASSWORD=${{ secrets.STAGING_POSTGRES_PASSWORD }}
           POSTGRES_DB=postgres
-          GEMINI_API_KEY=${{ secrets.STAGING_GEMINI_API_KEY }}
           GCLOUD_PROJECT=blanket-staging
           EOF
 
@@ -55,9 +53,7 @@ jobs:
           POSTGRES_HOST=${{ secrets.PROD_POSTGRES_HOST }}
           POSTGRES_PORT=5432
           POSTGRES_USER=blanket-app
-          POSTGRES_PASSWORD=${{ secrets.PROD_POSTGRES_PASSWORD }}
           POSTGRES_DB=postgres
-          GEMINI_API_KEY=${{ secrets.PROD_GEMINI_API_KEY }}
           GCLOUD_PROJECT=blanket-alpha
           EOF
 
