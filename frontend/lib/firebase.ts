@@ -1,16 +1,21 @@
 /**
  * Firebase Client SDK
  *
- * Shares auth with Blanket main app (same Firebase project: blanket-alpha).
+ * Shares auth with Blanket main app (same Firebase project).
  * Configured via NEXT_PUBLIC_ environment variables.
  *
- * Gracefully handles missing config (dev without .env.local).
+ * Supports:
+ * - Magic link (passwordless email sign-in)
+ * - Email/password (fallback)
  */
 
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
   signInWithEmailAndPassword,
+  sendSignInLinkToEmail,
+  isSignInWithEmailLink,
+  signInWithEmailLink,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   Auth,
@@ -49,10 +54,39 @@ function getFirebaseAuth(): Auth | undefined {
   return auth;
 }
 
+/** Email/password sign-in (fallback) */
 export async function signIn(email: string, password: string) {
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth) throw new Error('Firebase not configured');
   return signInWithEmailAndPassword(firebaseAuth, email, password);
+}
+
+/** Send a magic link to the user's email */
+export async function sendMagicLink(email: string): Promise<void> {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) throw new Error('Firebase not configured');
+
+  const actionCodeSettings = {
+    url: typeof window !== 'undefined' ? window.location.origin + '/login' : '',
+    handleCodeInApp: true,
+  };
+
+  await sendSignInLinkToEmail(firebaseAuth, email, actionCodeSettings);
+}
+
+/** Check if the current URL is a magic link callback */
+export function isMagicLinkCallback(): boolean {
+  if (typeof window === 'undefined') return false;
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) return false;
+  return isSignInWithEmailLink(firebaseAuth, window.location.href);
+}
+
+/** Complete magic link sign-in */
+export async function completeMagicLinkSignIn(email: string) {
+  const firebaseAuth = getFirebaseAuth();
+  if (!firebaseAuth) throw new Error('Firebase not configured');
+  return signInWithEmailLink(firebaseAuth, email, window.location.href);
 }
 
 export async function signOut() {
@@ -68,7 +102,6 @@ export function onAuthChange(callback: (user: User | null) => void) {
   }
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth) {
-    // No Firebase config — treat as unauthenticated
     callback(null);
     return () => {};
   }
