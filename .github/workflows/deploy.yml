@@ -42,7 +42,6 @@ jobs:
           POSTGRES_PORT=5432
           POSTGRES_USER=blanket-app
           POSTGRES_DB=postgres
-          GCLOUD_PROJECT=blanket-staging
           EOF
 
       - name: Write prod .env
@@ -54,7 +53,6 @@ jobs:
           POSTGRES_PORT=5432
           POSTGRES_USER=blanket-app
           POSTGRES_DB=postgres
-          GCLOUD_PROJECT=blanket-alpha
           EOF
 
       - name: Deploy to Staging
