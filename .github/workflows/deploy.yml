@@ -60,12 +60,12 @@ jobs:
       - name: Deploy to Staging
         if: github.ref == 'refs/heads/develop'
         working-directory: backend
-        run: firebase deploy --only functions:aiAgent --project blanket-staging --token ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --only functions --project blanket-staging --token ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deploy to Production
         if: github.ref == 'refs/heads/main'
         working-directory: backend
-        run: firebase deploy --only functions:aiAgent --project blanket-alpha --token ${{ secrets.FIREBASE_TOKEN }}
+        run: firebase deploy --only functions --project blanket-alpha --token ${{ secrets.FIREBASE_TOKEN }}
 
       - name: Deployment Summary
         run: |
