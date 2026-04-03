@@ -11,6 +11,7 @@ import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import chatRouter from './routes/ai-assistant/chat';
+import authRouter from './routes/ai-assistant/auth';
 
 // Initialize Firebase Admin (must happen before any Firebase services are used)
 // In Cloud Functions, FIREBASE_CONFIG is set automatically.
@@ -57,11 +58,12 @@ app.get('/v2/ai-assistant/health', (_req, res) => {
 
 // AI Assistant routes
 app.use('/v2/ai-assistant', chatRouter);
+app.use('/v2/ai-assistant/auth', authRouter);
 
 // Cloud Function export
 export const aiAgent = functions
   .runWith({
-    secrets: ['GEMINI_API_KEY', 'POSTGRES_PASSWORD'],
+    secrets: ['GEMINI_API_KEY', 'POSTGRES_PASSWORD', 'SENDGRID_API_KEY'],
     timeoutSeconds: 120,
     memory: '1GB',
   })

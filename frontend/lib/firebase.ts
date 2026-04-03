@@ -1,16 +1,16 @@
 /**
  * Firebase Client SDK
  *
- * Shares auth with Blanket main app (same Firebase project: blanket-alpha).
+ * Shares auth with Blanket main app (same Firebase project).
  * Configured via NEXT_PUBLIC_ environment variables.
  *
- * Gracefully handles missing config (dev without .env.local).
+ * Auth flow: OTP via backend → custom token → signInWithCustomToken
  */
 
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import {
   getAuth,
-  signInWithEmailAndPassword,
+  signInWithCustomToken,
   signOut as firebaseSignOut,
   onAuthStateChanged,
   Auth,
@@ -49,10 +49,11 @@ function getFirebaseAuth(): Auth | undefined {
   return auth;
 }
 
-export async function signIn(email: string, password: string) {
+/** Sign in with a Firebase custom token (from OTP verification) */
+export async function signInWithToken(token: string) {
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth) throw new Error('Firebase not configured');
-  return signInWithEmailAndPassword(firebaseAuth, email, password);
+  return signInWithCustomToken(firebaseAuth, token);
 }
 
 export async function signOut() {
@@ -68,7 +69,6 @@ export function onAuthChange(callback: (user: User | null) => void) {
   }
   const firebaseAuth = getFirebaseAuth();
   if (!firebaseAuth) {
-    // No Firebase config — treat as unauthenticated
     callback(null);
     return () => {};
   }
