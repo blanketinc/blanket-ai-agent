@@ -99,3 +99,37 @@
   opacity: 0.6;
   cursor: not-allowed;
 }
+
+.secondaryButton {
+  width: 100%;
+  padding: 0.625rem;
+  background: transparent;
+  color: var(--primary);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  font-size: 0.875rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+  margin-top: 1rem;
+}
+
+.secondaryButton:hover {
+  background: var(--primary-light, #eff6ff);
+}
+
+.successIcon {
+  color: var(--primary);
+  margin-bottom: 0.75rem;
+}
+
+.instructions {
+  color: var(--text-secondary);
+  font-size: 0.875rem;
+  line-height: 1.6;
+  text-align: center;
+}
+
+.instructions p {
+  margin: 0.25rem 0;
+}
