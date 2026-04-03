@@ -11,6 +11,7 @@ import express from 'express';
 import cors from 'cors';
 import compression from 'compression';
 import chatRouter from './routes/ai-assistant/chat';
+import authRouter from './routes/ai-assistant/auth';
 
 // Initialize Firebase Admin (must happen before any Firebase services are used)
 // In Cloud Functions, FIREBASE_CONFIG is set automatically.
@@ -37,12 +38,14 @@ app.use(
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile apps, Postman, etc.)
       if (!origin) return callback(null, true);
-      
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
+
+      // Allow exact matches
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      // Allow all Vercel preview deployments
+      if (origin.endsWith('.vercel.app')) return callback(null, true);
+
+      callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
   })
@@ -57,11 +60,12 @@ app.get('/v2/ai-assistant/health', (_req, res) => {
 
 // AI Assistant routes
 app.use('/v2/ai-assistant', chatRouter);
+app.use('/v2/ai-assistant/auth', authRouter);
 
 // Cloud Function export
 export const aiAgent = functions
   .runWith({
-    secrets: ['GEMINI_API_KEY', 'POSTGRES_PASSWORD'],
+    secrets: ['GEMINI_API_KEY', 'POSTGRES_PASSWORD', 'SENDGRID_API_KEY'],
     timeoutSeconds: 120,
     memory: '1GB',
   })
