@@ -38,12 +38,14 @@ app.use(
     origin: (origin, callback) => {
       // Allow requests with no origin (mobile apps, Postman, etc.)
       if (!origin) return callback(null, true);
-      
-      if (allowedOrigins.includes(origin)) {
-        callback(null, true);
-      } else {
-        callback(new Error('Not allowed by CORS'));
-      }
+
+      // Allow exact matches
+      if (allowedOrigins.includes(origin)) return callback(null, true);
+
+      // Allow all Vercel preview deployments
+      if (origin.endsWith('.vercel.app')) return callback(null, true);
+
+      callback(new Error('Not allowed by CORS'));
     },
     credentials: true,
   })
