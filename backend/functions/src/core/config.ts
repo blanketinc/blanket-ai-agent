@@ -3,6 +3,9 @@
  * Mirrors cloud-functions/Functions/functions/src/core/app-config.js pattern.
  */
 
+import * as dotenv from 'dotenv';
+dotenv.config();
+
 export interface AppConfig {
   projectId: string;
   apiBaseUrl: string;

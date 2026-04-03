@@ -1,5 +1,11 @@
 import ReactMarkdown from 'react-markdown';
 import styles from '../styles/Chat.module.css';
+import ThinkingBlock from './ThinkingBlock';
+import ToolCallDisplay from './ToolCallDisplay';
+import DiffView from './DiffView';
+import ApprovalButtons from './ApprovalButtons';
+import AgentQuestion, { QuestionOption } from './AgentQuestion';
+import TypewriterText from './TypewriterText';
 
 interface ToolCall {
   tool: string;
@@ -7,20 +13,136 @@ interface ToolCall {
   success: boolean;
 }
 
+/** A part of a streaming message — rendered in order */
+export interface MessagePart {
+  type: 'thinking' | 'text' | 'tool-call' | 'tool-result' | 'approval-request' | 'question' | 'diff';
+  content?: string;
+  toolCall?: {
+    id: string;
+    tool: string;
+    action: string;
+    params?: any;
+    isActive?: boolean;
+    result?: { success: boolean; result?: any; error?: string };
+  };
+  approval?: {
+    id: string;
+    description: string;
+    status?: 'pending' | 'approved' | 'rejected';
+  };
+  question?: {
+    id: string;
+    prompt: string;
+    options: QuestionOption[];
+    multiSelect: boolean;
+    answered?: boolean;
+    selectedValues?: string[];
+  };
+  diff?: { before: any; after: any };
+}
+
 interface ChatMessageProps {
   role: 'user' | 'assistant';
   content: string;
   toolCalls?: ToolCall[];
   timestamp?: number;
+  parts?: MessagePart[];
+  isStreaming?: boolean;
+  onApprove?: (approvalId: string) => void;
+  onReject?: (approvalId: string) => void;
+  onAnswerQuestion?: (questionId: string, selectedValues: string[], selectedLabels: string[]) => void;
+  approvalProcessing?: boolean;
 }
 
 export default function ChatMessage({
   role,
   content,
   toolCalls,
+  parts,
+  isStreaming,
+  onApprove,
+  onReject,
+  onAnswerQuestion,
+  approvalProcessing,
 }: ChatMessageProps) {
   const isUser = role === 'user';
 
+  // If we have structured parts (streaming message), render them
+  if (!isUser && parts && parts.length > 0) {
+    return (
+      <div className={`${styles.message} ${styles.assistantMessage}`}>
+        <div className={styles.messageAvatar}>
+          <div className={styles.aiAvatar}>AI</div>
+        </div>
+        <div className={styles.messageContent}>
+          {parts.map((part, i) => {
+            switch (part.type) {
+              case 'thinking':
+                return (
+                  <ThinkingBlock
+                    key={i}
+                    content={part.content || ''}
+                    isActive={isStreaming && i === parts.length - 1 && part.type === 'thinking'}
+                  />
+                );
+              case 'text':
+                return (
+                  <TypewriterText
+                    key={i}
+                    fullText={part.content || ''}
+                    isStreaming={isStreaming}
+                  />
+                );
+              case 'tool-call':
+                return part.toolCall ? (
+                  <ToolCallDisplay
+                    key={i}
+                    tool={part.toolCall.tool}
+                    action={part.toolCall.action}
+                    params={part.toolCall.params}
+                    isActive={part.toolCall.isActive}
+                    result={part.toolCall.result}
+                  />
+                ) : null;
+              case 'diff':
+                return part.diff ? (
+                  <DiffView key={i} before={part.diff.before} after={part.diff.after} />
+                ) : null;
+              case 'approval-request':
+                return part.approval ? (
+                  <ApprovalButtons
+                    key={i}
+                    description={part.approval.description}
+                    status={part.approval.status}
+                    onApprove={() => onApprove?.(part.approval!.id)}
+                    onReject={() => onReject?.(part.approval!.id)}
+                    disabled={approvalProcessing}
+                  />
+                ) : null;
+              case 'question':
+                return part.question ? (
+                  <AgentQuestion
+                    key={i}
+                    id={part.question.id}
+                    prompt={part.question.prompt}
+                    options={part.question.options}
+                    multiSelect={part.question.multiSelect}
+                    onAnswer={(qId, vals, labels) => onAnswerQuestion?.(qId, vals, labels)}
+                    answered={part.question.answered}
+                    selectedValues={part.question.selectedValues}
+                  />
+                ) : null;
+              default:
+                return null;
+            }
+          })}
+          {/* cursor handled by TypewriterText */}
+        </div>
+      </div>
+    );
+  }
+
+  // Legacy rendering for non-streaming messages
   return (
     <div
       className={`${styles.message} ${isUser ? styles.userMessage : styles.assistantMessage}`}

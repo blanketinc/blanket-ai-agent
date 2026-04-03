@@ -7,6 +7,13 @@
       "runtimeArgs": ["run", "dev"],
       "cwd": "blanket-ai-agent/backend/functions",
       "port": 5001
+    },
+    {
+      "name": "frontend",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "cwd": "blanket-ai-agent/frontend",
+      "port": 3000
     }
   ]
 }

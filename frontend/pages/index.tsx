@@ -1,18 +1,20 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import { useRouter } from 'next/router';
+import { useChat } from '@ai-sdk/react';
+import { DefaultChatTransport } from 'ai';
 import { onAuthChange, getIdToken, signOut, User } from '../lib/firebase';
-import { sendMessage, ChatResponse } from '../lib/api';
-import ChatMessage from '../components/ChatMessage';
+import { streamApproval, StreamCallbacks } from '../lib/streaming';
 import ChatInput from '../components/ChatInput';
 import ChatHistory from '../components/ChatHistory';
+import ThinkingBlock from '../components/ThinkingBlock';
+import ToolCallDisplay from '../components/ToolCallDisplay';
+import DiffView from '../components/DiffView';
+import ApprovalButtons from '../components/ApprovalButtons';
+import ChartRenderer from '../components/ChartRenderer';
+import AgentQuestion from '../components/AgentQuestion';
+import ThinkingIndicator from '../components/ThinkingIndicator';
+import ReactMarkdown from 'react-markdown';
 import styles from '../styles/Chat.module.css';
-
-interface Message {
-  role: 'user' | 'assistant';
-  content: string;
-  toolCalls?: Array<{ tool: string; action: string; success: boolean }>;
-  timestamp: number;
-}
 
 interface Conversation {
   id: string;
@@ -24,120 +26,317 @@ export default function ChatPage() {
   const router = useRouter();
   const [user, setUser] = useState<User | null>(null);
   const [loading, setLoading] = useState(true);
-  const [messages, setMessages] = useState<Message[]>([]);
   const [conversationId, setConversationId] = useState<string | undefined>();
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [sending, setSending] = useState(false);
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [loadingHistory, setLoadingHistory] = useState(false);
+  const [loadingConversations, setLoadingConversations] = useState(true);
+  const [approvalProcessing, setApprovalProcessing] = useState(false);
+  const [activeQuestion, setActiveQuestion] = useState<{
+    id: string;
+    prompt: string;
+    options: { label: string; value: string; description?: string }[];
+    multiSelect: boolean;
+  } | null>(null);
+  const answeredQuestionsRef = useRef<Set<string>>(new Set());
+  const [tokenRef, setTokenRef] = useState<string>('');
+  const tokenValueRef = useRef<string>('');
+  const conversationIdRef = useRef<string | undefined>();
   const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  const API_URL =
+    process.env.NEXT_PUBLIC_API_URL ||
+    'http://localhost:5001/v2/ai-assistant';
+
+  // Fetch conversation list from backend
+  const fetchConversations = useCallback(async (token?: string) => {
+    const t = token || tokenValueRef.current;
+    if (!t) return;
+    setLoadingConversations(true);
+    try {
+      const res = await fetch(`${API_URL}/conversations`, {
+        headers: { Authorization: `Bearer ${t}` },
+      });
+      if (res.ok) {
+        const data = await res.json();
+        if (data.success && data.result) {
+          setConversations(data.result);
+        }
+      }
+    } catch (e) {
+      console.error('Failed to fetch conversations:', e);
+    } finally {
+      setLoadingConversations(false);
+    }
+  }, [API_URL]);
 
   // Auth check
   useEffect(() => {
-    const unsubscribe = onAuthChange((firebaseUser) => {
+    const unsubscribe = onAuthChange(async (firebaseUser) => {
       if (firebaseUser) {
         setUser(firebaseUser);
+        const t = await getIdToken();
+        if (t) {
+          setTokenRef(t);
+          fetchConversations(t);
+        }
       } else {
         router.replace('/login');
       }
       setLoading(false);
     });
     return unsubscribe;
-  }, [router]);
+  }, [router, fetchConversations]);
+
+  // Keep refs in sync for closure access
+  tokenValueRef.current = tokenRef;
+  conversationIdRef.current = conversationId;
+
+  // Stable transport that reads latest values from refs
+  const transport = useMemo(
+    () =>
+      new DefaultChatTransport({
+        api: '/api/chat',
+        headers: () => ({
+          Authorization: `Bearer ${tokenValueRef.current}`,
+        }),
+        body: () => ({
+          conversationId: conversationIdRef.current,
+        }),
+      }),
+    []
+  );
+
+  // Vercel AI SDK useChat hook
+  const {
+    messages,
+    sendMessage,
+    status,
+    setMessages: setChatMessages,
+  } = useChat({
+    transport,
+    onError: (error) => {
+      console.error('Chat error:', error);
+    },
+    onFinish: ({ message }: any) => {
+      // Extract conversationId from data-conversation parts
+      const convPart = message?.parts?.find(
+        (p: any) => p.type === 'data-conversation'
+      ) as any;
+      if (convPart?.data?.conversationId && !convPart.data.partial) {
+        setConversationId(convPart.data.conversationId);
+      }
+      // Refresh sidebar after each message
+      fetchConversations();
+    },
+  });
+
+  const isStreaming = status === 'streaming' || status === 'submitted';
 
   // Scroll to bottom on new messages
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
-  }, [messages]);
+  }, [messages, status]);
+
+  // Detect question parts in streaming messages and show popover
+  useEffect(() => {
+    if (!messages.length) return;
+    const lastMsg = messages[messages.length - 1];
+    if (lastMsg.role !== 'assistant') return;
+    const questionPart = lastMsg.parts?.find(
+      (p: any) => p.type === 'data-question' && !answeredQuestionsRef.current.has(p.data?.id)
+    ) as any;
+    if (questionPart?.data && !activeQuestion) {
+      setActiveQuestion(questionPart.data);
+    }
+  }, [messages, activeQuestion]);
+
+  // Refresh token periodically
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      const t = await getIdToken();
+      if (t) setTokenRef(t);
+    }, 5 * 60 * 1000); // every 5 min
+    return () => clearInterval(interval);
+  }, []);
 
   const handleSend = useCallback(
     async (message: string) => {
-      if (sending) return;
+      if (isStreaming) return;
 
-      const token = await getIdToken();
-      if (!token) {
+      // Refresh token before sending
+      const t = await getIdToken();
+      if (!t) {
         router.replace('/login');
         return;
       }
+      setTokenRef(t);
 
-      // Add user message immediately
-      const userMsg: Message = {
-        role: 'user',
-        content: message,
-        timestamp: Date.now(),
+      sendMessage({ text: message });
+    },
+    [isStreaming, router, sendMessage]
+  );
+
+  /**
+   * Handle approval/rejection — uses our custom streaming
+   * since the approval endpoint is separate from the chat flow.
+   * Captures response and appends it to the AI SDK messages.
+   */
+  const handleApproval = useCallback(
+    async (approvalId: string, approved: boolean) => {
+      const token = await getIdToken();
+      if (!token) return;
+      setApprovalProcessing(true);
+
+      let responseText = '';
+      let thinkingText = '';
+
+      const callbacks: StreamCallbacks = {
+        onText: (data) => {
+          responseText += data.content || '';
+        },
+        onThinking: (data) => {
+          thinkingText += data.content || '';
+        },
+        onToolResult: (data) => {
+          if (data.error) {
+            responseText += `\n⚠️ Error: ${data.error}`;
+          }
+        },
+        onError: (data) => {
+          responseText += `\n❌ ${data.message || 'Approval failed'}`;
+          setApprovalProcessing(false);
+        },
+        onDone: (data) => {
+          setApprovalProcessing(false);
+          // Capture conversationId from approval response
+          if (data?.conversationId) {
+            setConversationId(data.conversationId);
+          }
+          // Append the approval result as a new assistant message in the chat
+          const parts: any[] = [];
+          if (thinkingText) {
+            parts.push({ type: 'reasoning', text: thinkingText, state: 'done' });
+          }
+          if (responseText) {
+            parts.push({ type: 'text', text: responseText, state: 'done' });
+          } else {
+            parts.push({
+              type: 'text',
+              text: approved
+                ? '✅ Action approved and executed.'
+                : '❌ Action was rejected.',
+              state: 'done',
+            });
+          }
+          setChatMessages((prev: any[]) => [
+            ...prev,
+            {
+              id: `approval-${Date.now()}`,
+              role: 'assistant',
+              parts,
+            },
+          ]);
+        },
       };
-      setMessages((prev) => [...prev, userMsg]);
-      setSending(true);
 
       try {
-        const response: ChatResponse = await sendMessage(
-          message,
-          token,
-          conversationId
-        );
-
-        if (response.success && response.result) {
-          // Set conversation ID from first response
-          if (!conversationId) {
-            setConversationId(response.result.conversationId);
-
-            // Add to conversation list
-            setConversations((prev) => [
-              {
-                id: response.result!.conversationId,
-                preview: message.slice(0, 50),
-                updatedAt: Date.now(),
-              },
-              ...prev,
-            ]);
-          }
-
-          // Add assistant response
-          const assistantMsg: Message = {
+        await streamApproval(approvalId, approved, token, callbacks);
+      } catch {
+        setApprovalProcessing(false);
+        setChatMessages((prev: any[]) => [
+          ...prev,
+          {
+            id: `approval-err-${Date.now()}`,
             role: 'assistant',
-            content: response.result.message,
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => [...prev, assistantMsg]);
-        } else {
-          // Show error as assistant message
-          const errorMsg: Message = {
-            role: 'assistant',
-            content:
-              response.error ||
-              'Something went wrong. Please try again.',
-            timestamp: Date.now(),
-          };
-          setMessages((prev) => [...prev, errorMsg]);
-        }
-      } catch (err) {
-        const errorMsg: Message = {
-          role: 'assistant',
-          content:
-            'Unable to reach the server. Please check your connection and try again.',
-          timestamp: Date.now(),
-        };
-        setMessages((prev) => [...prev, errorMsg]);
-      } finally {
-        setSending(false);
+            parts: [{ type: 'text', text: '❌ Failed to process approval. Please try again.', state: 'done' }],
+          },
+        ]);
       }
     },
-    [sending, conversationId, router]
+    [setChatMessages]
+  );
+
+  const handleAnswerQuestion = useCallback(
+    (questionId: string, _selectedValues: string[], selectedLabels: string[]) => {
+      answeredQuestionsRef.current.add(questionId);
+      setActiveQuestion(null);
+      const responseText = selectedLabels.length === 1
+        ? selectedLabels[0]
+        : selectedLabels.join(', ');
+      handleSend(responseText);
+    },
+    [handleSend]
   );
 
   const handleNewChat = useCallback(() => {
-    setMessages([]);
+    setChatMessages([]);
     setConversationId(undefined);
     setSidebarOpen(false);
-  }, []);
+    setActiveQuestion(null);
+    answeredQuestionsRef.current.clear();
+  }, [setChatMessages]);
 
   const handleSelectConversation = useCallback(
-    (id: string) => {
-      // For now just switch — history loading can be added later
+    async (id: string) => {
+      const token = await getIdToken();
+      if (!token) return;
+
       setConversationId(id);
-      setMessages([]);
+      setChatMessages([]);
       setSidebarOpen(false);
+      setLoadingHistory(true);
+
+      // Load conversation history
+      try {
+        const res = await fetch(`${API_URL}/history?conversationId=${id}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (res.ok) {
+          const data = await res.json();
+          if (data.success && data.result?.messages) {
+            // Convert stored messages to AI SDK format
+            const uiMessages = data.result.messages.map((m: any, i: number) => ({
+              id: `hist-${id}-${i}`,
+              role: m.role,
+              parts: [{ type: 'text', text: (m.content || '').replace(/<think>[\s\S]*?<\/think>/g, '').trim(), state: 'done' }],
+            }));
+            setChatMessages(uiMessages);
+          }
+        }
+      } catch (e) {
+        console.error('Failed to load conversation:', e);
+        setChatMessages([]);
+      } finally {
+        setLoadingHistory(false);
+      }
     },
-    []
+    [setChatMessages, API_URL]
+  );
+
+  const handleRename = useCallback(
+    async (id: string, title: string) => {
+      const token = await getIdToken();
+      if (!token) return;
+
+      try {
+        await fetch(`${API_URL}/rename`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+            Authorization: `Bearer ${token}`,
+          },
+          body: JSON.stringify({ conversationId: id, title }),
+        });
+
+        setConversations((prev: any[]) =>
+          prev.map((c: any) => (c.id === id ? { ...c, title } : c))
+        );
+      } catch (e) {
+        console.error('Failed to rename conversation:', e);
+      }
+    },
+    [API_URL]
   );
 
   const handleSignOut = useCallback(async () => {
@@ -162,12 +361,13 @@ export default function ChatPage() {
         <ChatHistory
           conversations={conversations}
           activeId={conversationId}
+          loading={loadingConversations}
           onSelect={handleSelectConversation}
           onNew={handleNewChat}
+          onRename={handleRename}
         />
       </div>
 
-      {/* Sidebar overlay on mobile */}
       {sidebarOpen && (
         <div
           className={styles.overlay}
@@ -177,27 +377,20 @@ export default function ChatPage() {
 
       {/* Main chat area */}
       <div className={styles.main}>
-        {/* Header */}
         <header className={styles.header}>
           <button
             className={styles.menuButton}
             onClick={() => setSidebarOpen(!sidebarOpen)}
             aria-label="Toggle sidebar"
           >
-            <svg
-              width="24"
-              height="24"
-              viewBox="0 0 24 24"
-              fill="none"
-              stroke="currentColor"
-              strokeWidth="2"
-            >
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
               <line x1="3" y1="6" x2="21" y2="6" />
               <line x1="3" y1="12" x2="21" y2="12" />
               <line x1="3" y1="18" x2="21" y2="18" />
             </svg>
           </button>
           <h1 className={styles.headerTitle}>Blanket AI</h1>
+          <span className={styles.headerBadge}>Agent</span>
           <div className={styles.headerRight}>
             <span className={styles.userEmail}>{user?.email}</span>
             <button onClick={handleSignOut} className={styles.signOutButton}>
@@ -206,72 +399,177 @@ export default function ChatPage() {
           </div>
         </header>
 
-        {/* Messages */}
         <div className={styles.messagesContainer}>
-          {messages.length === 0 && (
+          {loadingHistory && (
+            <div className={styles.skeletonContainer}>
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+              <div className={styles.skeletonMessage} />
+            </div>
+          )}
+
+          {!loadingHistory && messages.length === 0 && (
             <div className={styles.welcome}>
-              <h2>Welcome to Blanket AI</h2>
+              <h2>Blanket AI Agent</h2>
               <p>
-                I can help you manage templates, analyze performance, and
-                answer food safety questions.
+                I autonomously manage your restaurant operations — templates,
+                analytics, and food safety. Watch me think, explore, and act.
               </p>
               <div className={styles.suggestions}>
-                <button
-                  className={styles.suggestion}
-                  onClick={() =>
-                    handleSend(
-                      'Show completion rates for all locations this week'
-                    )
-                  }
-                >
-                  Show completion rates this week
+                <button className={styles.suggestion} onClick={() => handleSend('We just added a new seasonal salad to all locations. Which templates need updating?')}>
+                  New seasonal salad — update templates
                 </button>
-                <button
-                  className={styles.suggestion}
-                  onClick={() =>
-                    handleSend('List all bar opening checklists')
-                  }
-                >
-                  List bar opening checklists
+                <button className={styles.suggestion} onClick={() => handleSend('Which locations have compliance issues this week?')}>
+                  Find compliance issues
                 </button>
-                <button
-                  className={styles.suggestion}
-                  onClick={() =>
-                    handleSend(
-                      'What temperature should cooked chicken be held at?'
-                    )
-                  }
-                >
-                  Food safety: chicken holding temp
+                <button className={styles.suggestion} onClick={() => handleSend('Set up templates for our new Miami location based on our Phoenix setup')}>
+                  Set up new Miami location
+                </button>
+                <button className={styles.suggestion} onClick={() => handleSend('Add a temperature check task to all opening checklists')}>
+                  Add temp checks to opening lists
                 </button>
               </div>
             </div>
           )}
 
-          {messages.map((msg, i) => (
-            <ChatMessage
-              key={i}
-              role={msg.role}
-              content={msg.content}
-              toolCalls={msg.toolCalls}
-              timestamp={msg.timestamp}
-            />
-          ))}
+          {messages.map((msg, msgIdx) => {
+            const isUser = msg.role === 'user';
+            const isLastAssistant =
+              msg.role === 'assistant' && msgIdx === messages.length - 1;
 
-          {sending && (
-            <div className={styles.typingIndicator}>
-              <span />
-              <span />
-              <span />
-            </div>
-          )}
+            if (isUser) {
+              return (
+                <div key={msg.id} className={`${styles.message} ${styles.userMessage}`}>
+                  <div className={styles.messageAvatar}>
+                    <div className={styles.userAvatar}>You</div>
+                  </div>
+                  <div className={styles.messageContent}>
+                    <p>{msg.parts?.filter((p: any) => p.type === 'text').map((p: any) => p.text).join('') || ''}</p>
+                  </div>
+                </div>
+              );
+            }
+
+            // Assistant message — render parts from AI SDK
+            return (
+              <div key={msg.id} className={`${styles.message} ${styles.assistantMessage}`}>
+                <div className={styles.messageAvatar}>
+                  <div className={styles.aiAvatar}>AI</div>
+                </div>
+                <div className={styles.messageContent}>
+                  {msg.parts?.map((part: any, i: number) => {
+                    switch (part.type) {
+                      case 'reasoning':
+                        return (
+                          <ThinkingBlock
+                            key={i}
+                            content={part.text || ''}
+                            isActive={isLastAssistant && isStreaming}
+                          />
+                        );
+
+                      case 'text':
+                        return (
+                          <div key={i} className={styles.streamedText}>
+                            <ReactMarkdown>{part.text || ''}</ReactMarkdown>
+                            {isLastAssistant && isStreaming && (
+                              <span className={styles.streamCursor} />
+                            )}
+                          </div>
+                        );
+
+                      case 'tool-invocation': {
+                        const toolInvocation = part.toolInvocation;
+                        const hasResult = toolInvocation.state === 'result';
+                        const isAnalytics = toolInvocation.toolName === 'blanket-analytics';
+                        const analyticsQuery = toolInvocation.input?.query;
+                        const analyticsData = hasResult ? toolInvocation.output?.result : null;
+
+                        return (
+                          <div key={i}>
+                            <ToolCallDisplay
+                              tool={toolInvocation.toolName}
+                              action={toolInvocation.input?.action || toolInvocation.input?.query || ''}
+                              params={toolInvocation.input?.params}
+                              isActive={!hasResult && isLastAssistant && isStreaming}
+                              result={
+                                hasResult
+                                  ? {
+                                      success: toolInvocation.output?.success ?? true,
+                                      result: isAnalytics ? undefined : toolInvocation.output?.result,
+                                      error: toolInvocation.output?.error,
+                                    }
+                                  : undefined
+                              }
+                            />
+                            {isAnalytics && hasResult && analyticsData && (
+                              <ChartRenderer queryType={analyticsQuery} data={analyticsData} />
+                            )}
+                          </div>
+                        );
+                      }
+
+                      // Custom data parts from our proxy
+                      case 'data-approval-request':
+                        return (
+                          <ApprovalButtons
+                            key={i}
+                            description={part.data?.description || ''}
+                            status={part.data?.status}
+                            onApprove={() => handleApproval(part.data?.id, true)}
+                            onReject={() => handleApproval(part.data?.id, false)}
+                            disabled={approvalProcessing}
+                          />
+                        );
+
+                      case 'data-analytics':
+                        return part.data ? (
+                          <ChartRenderer
+                            key={i}
+                            queryType={part.data.queryType}
+                            data={part.data.result}
+                          />
+                        ) : null;
+
+                      case 'data-diff':
+                        return part.data ? (
+                          <DiffView
+                            key={i}
+                            before={part.data.before}
+                            after={part.data.after}
+                          />
+                        ) : null;
+
+                      default:
+                        return null;
+                    }
+                  })}
+                </div>
+              </div>
+            );
+          })}
+
+          {/* Typing indicator */}
+          {status === 'submitted' && <ThinkingIndicator />}
 
           <div ref={messagesEndRef} />
         </div>
 
-        {/* Input */}
         <div className={styles.inputContainer}>
-          <ChatInput onSend={handleSend} disabled={sending} />
+          {activeQuestion && (
+            <div className={styles.questionPopover}>
+              <AgentQuestion
+                id={activeQuestion.id}
+                prompt={activeQuestion.prompt}
+                options={activeQuestion.options}
+                multiSelect={activeQuestion.multiSelect}
+                onAnswer={handleAnswerQuestion}
+              />
+            </div>
+          )}
+          <ChatInput onSend={handleSend} disabled={isStreaming || approvalProcessing} />
         </div>
       </div>
     </div>
